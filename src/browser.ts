@@ -28,6 +28,11 @@ interface DevToolsVersion {
   webSocketDebuggerUrl: string
 }
 
+interface DevToolsProcessInfo {
+  id: number
+  type: string
+}
+
 interface DevToolsTarget {
   id: string
   type: string
@@ -160,6 +165,7 @@ export function buildLaunchArguments(
     `--user-data-dir=${directory.path}`,
     '--no-first-run',
     '--no-default-browser-check',
+    '--disable-background-mode',
     ...(minimized ? ['--start-minimized'] : []),
     '--new-window',
     url,
@@ -407,10 +413,16 @@ export class BrowserManager {
     if (!probeUrl) return { state: 'unknown', message: 'No platform or login URL is configured.', checkedAt }
     return await this.withDirectoryLock(directory.id, async () => {
       let target: DevToolsTarget | undefined
+      let temporaryTarget = false
       try {
         let runtime = await this.activeRuntime(directory)
-        if (!runtime) runtime = await this.launch(directory, 'about:blank', minimized)
-        target = await this.createTarget(runtime.port, probeUrl)
+        if (!runtime) {
+          runtime = await this.launch(directory, probeUrl, minimized)
+          target = await this.waitForLaunchedTarget(runtime.port, account, probeUrl)
+        } else {
+          target = await this.createTarget(runtime.port, probeUrl)
+          temporaryTarget = true
+        }
         const settled = await this.waitForTarget(runtime.port, target.id)
         await this.persistSessionCookies(directory)
         return this.classifyLogin(account, settled.url, checkedAt)
@@ -421,7 +433,7 @@ export class BrowserManager {
           checkedAt,
         }
       } finally {
-        if (target) {
+        if (target && temporaryTarget) {
           const runtime = await this.activeRuntime(directory)
           if (runtime) await this.closeTarget(runtime.port, target.id).catch(() => undefined)
         }
@@ -467,20 +479,23 @@ export class BrowserManager {
       throw error
     }
     if (!child.pid) throw new Error('browser started without a process id')
+    const browserPid = await this.browserProcessId(port, child.pid)
     const runtime: BrowserRuntime = {
       directoryId: directory.id,
       instanceId: randomUUID(),
       browser: directory.browser,
       path: directory.path,
-      pid: child.pid,
+      pid: browserPid,
       port,
       startedAt: new Date().toISOString(),
     }
     this.runtimes.set(directory.id, runtime)
     await this.persistRuntimes()
-    child.once('exit', () => {
-      void this.removeRuntime(directory.id, runtime.instanceId)
-    })
+    if (child.pid === browserPid) {
+      child.once('exit', () => {
+        void this.removeRuntime(directory.id, runtime.instanceId)
+      })
+    }
     child.unref()
     this.startCookiePersistence(directory)
     return runtime
@@ -497,9 +512,12 @@ export class BrowserManager {
   }
 
   private async runtimeIsHealthy(runtime: BrowserRuntime): Promise<boolean> {
-    if (!processExists(runtime.pid)) return false
     try {
       await this.version(runtime.port)
+      if (processExists(runtime.pid)) return true
+      const browserPid = await this.browserProcessId(runtime.port, 0)
+      if (!browserPid || !processExists(browserPid)) return false
+      runtime.pid = browserPid
       return true
     } catch {
       return false
@@ -581,6 +599,39 @@ export class BrowserManager {
     throw new Error('browser did not expose its fixed debugging port within 20 seconds; close any browser already using this data directory and try again')
   }
 
+  private async waitForLaunchedTarget(
+    port: number,
+    account: PlatformAccount,
+    requestedUrl: string,
+  ): Promise<DevToolsTarget> {
+    let fallback: DevToolsTarget | undefined
+    let fallbackSignature = ''
+    let stableCount = 0
+    for (let attempt = 0; attempt < 75; attempt += 1) {
+      const pages = await this.targets(port)
+      const preferred = pages.find(target => this.sameDocument(target.url, requestedUrl))
+        || pages.find(target => this.belongsToAccount(target.url, account))
+      if (preferred) return preferred
+
+      const webPages = pages.filter(target => Boolean(this.parseWebUrl(target.url)))
+      if (webPages.length === 1) {
+        fallback = webPages[0]
+        const signature = `${fallback.id}:${fallback.url}`
+        if (signature === fallbackSignature) stableCount += 1
+        else stableCount = 0
+        fallbackSignature = signature
+        if (stableCount >= 5) return fallback
+      } else {
+        fallback = undefined
+        fallbackSignature = ''
+        stableCount = 0
+      }
+      await delay(200)
+    }
+    if (fallback) return fallback
+    throw new Error('browser started but did not expose the platform tab for login checking')
+  }
+
   private async waitForTarget(port: number, targetId: string): Promise<DevToolsTarget> {
     let previousUrl = ''
     let stableCount = 0
@@ -632,6 +683,21 @@ export class BrowserManager {
       await session.send('Page.bringToFront')
     } finally {
       session.close()
+    }
+  }
+
+  private async browserProcessId(port: number, fallback: number): Promise<number> {
+    try {
+      const session = await CdpSession.connect((await this.version(port)).webSocketDebuggerUrl)
+      try {
+        const result = await session.send<{ processInfo: DevToolsProcessInfo[] }>('SystemInfo.getProcessInfo')
+        const browser = result.processInfo.find(process => process.type === 'browser')
+        return browser && Number.isInteger(browser.id) && browser.id > 0 ? browser.id : fallback
+      } finally {
+        session.close()
+      }
+    } catch {
+      return fallback
     }
   }
 
