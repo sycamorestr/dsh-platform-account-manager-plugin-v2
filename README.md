@@ -107,7 +107,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 ### 1. 平台管理总览
 
-![平台管理总览](docs/images/platform-manager-overview.png)
+![平台管理总览](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/platform-manager-overview.png)
 
 - 浏览器数据目录是一级分组。同一个目录中的账号共享 Chromium 进程、Cookie 和站点存储；需要隔离的账号应使用不同目录。
 - 目录标题区展示浏览器类型、在线状态、活动/归档账号数、页面数和最近一次 Cookie 同步状态。
@@ -117,7 +117,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 ### 2. 新增账号并复用已有目录
 
-![新增账号并复用已有目录](docs/images/add-account-existing-directory.png)
+![新增账号并复用已有目录](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/add-account-existing-directory.png)
 
 - 平台名称可以自由输入，因此不局限于电商，也可以登记广告、内容、客服、ERP 或其他企业后台。
 - 账号名称用于用户和 Agent 识别目标账号；账号标识只供人工备注，不作为 Agent 识别或权限控制字段。
@@ -127,7 +127,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 ### 3. 新增独立浏览器数据目录
 
-![新增独立浏览器数据目录](docs/images/add-account-new-directory.png)
+![新增独立浏览器数据目录](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/add-account-new-directory.png)
 
 - 选择“新建数据目录”后，可以为目录命名并指定 Google Chrome 或 Microsoft Edge。
 - 自定义目录地址是可选项。留空时使用插件配置的 `browserDataRoot`；指定地址时必须选择一个安全的空目录。
@@ -136,7 +136,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 ### 4. 编辑账号
 
-![编辑账号](docs/images/edit-account.png)
+![编辑账号](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/edit-account.png)
 
 - 可以更新平台名称、账号名称、标识、后台/登录地址和 Agent 操作说明。
 - 底部只读区域明确显示账号当前绑定的浏览器数据目录；编辑账号不会移动目录，也不会复制浏览器数据。
@@ -144,7 +144,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 ### 5. 检测登录状态
 
-![登录状态检测结果](docs/images/login-check-result.png)
+![登录状态检测结果](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/login-check-result.png)
 
 - 点击账号行的盾牌按钮后，插件访问配置的后台地址并观察最终跳转，不读取页面正文、不点击控件、不输入账号密码。
 - 结果弹窗给出 `登录有效`、`登录失效`、`无法判断` 或 `检测失败`，同时显示检测说明、最终地址和检测时间。
@@ -153,7 +153,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 ### 6. 定时会话保活
 
-![定时会话保活](docs/images/keep-alive-settings.png)
+![定时会话保活](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/keep-alive-settings.png)
 
 - 保活默认关闭，可为每个账号分别设置运行间隔、随机延迟和每日允许执行的时间窗口。
 - “完成后关闭本次临时启动的浏览器”只关闭本次保活为离线目录启动的临时实例，不应关闭原本已经在线的浏览器。
@@ -162,7 +162,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 ### 7. 归档、恢复与永久移除
 
-![归档账号管理](docs/images/archive-management.png)
+![归档账号管理](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/archive-management.png)
 
 - 归档账号会从活动列表移入“已归档账号”，可以随时恢复，也可以永久移除账号记录。
 - 账号归档不会删除浏览器数据。只有目录内没有活动账号、浏览器已关闭后，目录本身才允许归档。
