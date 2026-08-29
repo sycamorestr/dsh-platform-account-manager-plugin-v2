@@ -1,0 +1,20 @@
+node_modules/
+lib/
+coverage/
+*.log
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+Thumbs.db
+
+# Never commit DSH runtime metadata or Chromium profile data.
+.dsh/
+accounts.json
+accounts.*.backup.json
+browser-runtime.json
+browser-data/
+profiles/
+.dsh-browser-data.json
