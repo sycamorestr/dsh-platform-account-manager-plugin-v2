@@ -1,5 +1,5 @@
 {
-  "name": "dsh-store-account-manager",
+  "name": "dsh-platform-account-manager-plugin",
   "version": "0.3.0",
   "description": "Local-first platform account and persistent browser-session manager for DeepSeek Harness",
   "type": "module",
@@ -41,11 +41,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sycamorestr/dsh-store-account-manager.git"
+    "url": "git+https://github.com/sycamorestr/dsh-platform-account-manager-plugin.git"
   },
-  "homepage": "https://github.com/sycamorestr/dsh-store-account-manager#readme",
+  "homepage": "https://github.com/sycamorestr/dsh-platform-account-manager-plugin#readme",
   "bugs": {
-    "url": "https://github.com/sycamorestr/dsh-store-account-manager/issues"
+    "url": "https://github.com/sycamorestr/dsh-platform-account-manager-plugin/issues"
   },
   "dependencies": {
     "lucide-react": "^0.468.0"

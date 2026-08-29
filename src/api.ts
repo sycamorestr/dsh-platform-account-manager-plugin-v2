@@ -6,7 +6,7 @@ import type { KeepAliveScheduler } from './maintenance.js'
 import type { PublicBrowserDataDirectory, PublicPlatformAccount } from './shared.js'
 import type { AccountRepository } from './store.js'
 
-const API_PATH = '/store-account-manager/api/accounts'
+const API_PATH = '/platform-account-manager/api/accounts'
 
 export interface PublicState {
   accounts: PublicPlatformAccount[]

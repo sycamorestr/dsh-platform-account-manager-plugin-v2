@@ -31,7 +31,7 @@ export const Config: Schema<Config> = Schema.object({
   edgePath: Schema.string(),
 })
 
-export const name = 'store-account-manager'
+export const name = 'platform-account-manager'
 export const inject = ['tools', 'webServer', 'timer', 'directoryPicker']
 
 export async function apply(ctx: Context, config: Config): Promise<void> {

@@ -1,8 +1,8 @@
-# DSH 平台账号管理器
+# DSH 平台账号管理器插件
 
-[![CI](https://github.com/sycamorestr/dsh-store-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/sycamorestr/dsh-store-account-manager/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/sycamorestr/dsh-store-account-manager)](https://github.com/sycamorestr/dsh-store-account-manager/releases)
-[![License](https://img.shields.io/github/license/sycamorestr/dsh-store-account-manager)](LICENSE)
+[![CI](https://github.com/sycamorestr/dsh-platform-account-manager-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/sycamorestr/dsh-platform-account-manager-plugin/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sycamorestr/dsh-platform-account-manager-plugin)](https://github.com/sycamorestr/dsh-platform-account-manager-plugin/releases)
+[![License](https://img.shields.io/github/license/sycamorestr/dsh-platform-account-manager-plugin)](LICENSE)
 
 > 让 Agent 知道“要用哪个账号、从哪个浏览器数据目录进入哪个平台”，并在浏览器重启后尽可能延续原有登录态。
 
@@ -380,6 +380,8 @@ store-account-manager/
         └── Default/             # Chromium 自己维护的数据
 ```
 
+> 兼容性说明：磁盘目录继续使用 `store-account-manager` 这个 v0.3.0 早期名称。公开包名和插件 ID 的调整不会移动浏览器数据，请不要手动重命名该目录。
+
 账号元数据与浏览器状态分离：
 
 - 一个 `PlatformAccount` 必须指向一个 `BrowserDataDirectory`；
@@ -413,8 +415,8 @@ store-account-manager/
 ### 本地开发安装
 
 ```powershell
-git clone https://github.com/sycamorestr/dsh-store-account-manager.git
-cd dsh-store-account-manager
+git clone https://github.com/sycamorestr/dsh-platform-account-manager-plugin.git
+cd dsh-platform-account-manager-plugin
 pnpm install
 pnpm build
 dsh plugin --profile web add link:$PWD
@@ -444,7 +446,7 @@ http://127.0.0.1:3080/
 可以在 Web Profile 的 `cordis.patch.yml` 中覆盖完整配置：
 
 ```yaml
-- id: store-account-manager
+- id: platform-account-manager
   config:
     dataDir: 'D:\DSH\platform-manager'
     browserDataRoot: 'E:\BrowserData'

@@ -38,8 +38,8 @@ import {
 import { styles } from './styles.js'
 
 const NS = 'platformManagement'
-const STYLE_ID = 'dsh-store-account-manager/styles-v3'
-const API_URL = '/store-account-manager/api/accounts'
+const STYLE_ID = 'dsh-platform-account-manager-plugin/styles-v3'
+const API_URL = '/platform-account-manager/api/accounts'
 
 interface DirectorySnapshot {
   loading: boolean
@@ -1114,7 +1114,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)?.remove()
     const style = document.createElement('style')
-    style.dataset.plugin = 'dsh-store-account-manager'
+    style.dataset.plugin = 'dsh-platform-account-manager-plugin'
     style.dataset.pluginCss = STYLE_ID
     style.textContent = styles
     document.head.appendChild(style)
