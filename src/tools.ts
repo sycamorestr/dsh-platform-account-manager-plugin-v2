@@ -14,7 +14,7 @@ function asJsonValue(value: unknown): JsonValue {
 }
 
 function accountId(value: string | undefined): string {
-  if (!value || !/^[0-9a-f-]{36}$/i.test(value)) throw new TypeError('valid account_id is required')
+  if (!value || !/^ACC-\d{4,}$/.test(value)) throw new TypeError('valid account_id is required')
   return value
 }
 
@@ -56,7 +56,7 @@ export function registerTools(ctx: Context, repository: AccountRepository, brows
       const accounts = selected ? [await repository.get(selected)] : await repository.list()
       return asJsonValue(await Promise.all(accounts.map(async account => {
         const directory = await repository.directoryForAccount(account)
-        return agentAccountView(account, await browser.platformStatus(account, directory))
+        return agentAccountView(account, await browser.platformStatus(account, directory, await repository.profileForAccount(account)))
       })))
     },
   }))
@@ -72,7 +72,7 @@ export function registerTools(ctx: Context, repository: AccountRepository, brows
     async execute(args) {
       const account = await repository.get(accountId(args.account_id))
       const directory = await repository.directoryForAccount(account)
-      const status = await browser.open(account, directory)
+      const status = await browser.open(account, directory, await repository.profileForAccount(account))
       return asJsonValue({
         accountId: account.id,
         opened: true,
@@ -96,9 +96,10 @@ export function registerTools(ctx: Context, repository: AccountRepository, brows
     async execute(args) {
       const account = await repository.get(accountId(args.account_id))
       const directory = await repository.directoryForAccount(account)
-      const wasOnline = await browser.isOnline(directory)
+      const profile = await repository.profileForAccount(account)
+      const wasOnline = await browser.isOnline(directory, profile)
       try {
-        const result = await browser.checkLogin(account, directory, true)
+        const result = await browser.checkLogin(account, directory, profile, true)
         await repository.recordLoginCheck(account.id, result)
         return asJsonValue({
           accountId: account.id,
@@ -107,14 +108,14 @@ export function registerTools(ctx: Context, repository: AccountRepository, brows
           checkedAt: result.checkedAt,
         })
       } finally {
-        if (!wasOnline) await browser.close(directory).catch(() => undefined)
+        if (!wasOnline) await browser.closeProfile(directory, profile).catch(() => undefined)
       }
     },
   }))
 
   ctx.tools.register(defineTool({
     name: 'platform_browser_close',
-    description: 'Close the browser process for a platform account after syncing session cookies. All platform accounts sharing the same browser data directory will go offline.',
+    description: 'Close the bound browser Profile for a platform account after syncing session cookies. Other Profiles in the same browser data root remain online.',
     parameters: {
       account_id: { type: 'string', required: true, description: 'Account id from platform_account_list.' },
     },
@@ -123,8 +124,9 @@ export function registerTools(ctx: Context, repository: AccountRepository, brows
     async execute(args) {
       const account = await repository.get(accountId(args.account_id))
       const directory = await repository.directoryForAccount(account)
-      const affected = (await repository.accountsForDirectory(directory.id)).map(candidate => ({ id: candidate.id, name: candidate.name }))
-      await browser.close(directory)
+      const profile = await repository.profileForAccount(account)
+      const affected = (await repository.accountsForProfile(profile.id)).map(candidate => ({ id: candidate.id, name: candidate.name }))
+      await browser.closeProfile(directory, profile)
       return asJsonValue({ closed: true, affectedAccounts: affected })
     },
   }))
@@ -133,7 +135,7 @@ export function registerTools(ctx: Context, repository: AccountRepository, brows
     if (execution.name !== 'platform_browser_close') return next()
     return {
       kind: 'ask',
-      reason: 'Closing this browser may close pages for multiple platform accounts that share its data directory.',
+      reason: 'Closing this browser Profile may close pages for multiple platform accounts that share it.',
     }
   })
 }

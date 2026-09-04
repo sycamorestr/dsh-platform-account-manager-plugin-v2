@@ -1,6 +1,8 @@
 node_modules/
 lib/
 coverage/
+.playwright-cli/
+output/
 *.log
 
 .env

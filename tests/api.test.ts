@@ -22,7 +22,16 @@ test('public state decorates archived accounts through archived directories', as
     await repository.archiveDirectory(directory.id, { online: false })
     const browser = {
       async directoryStatus() {
-        return { online: false, pages: 0, cookieSync: { state: 'idle', persistedCount: 0 } }
+        return {
+          online: false,
+          pages: 0,
+          onlineProfileIds: [],
+          onlineProfileNames: [],
+          cookieSync: { state: 'idle', persistedCount: 0 },
+        }
+      },
+      profileCookieStatus() {
+        return { state: 'idle', persistedCount: 0 }
       },
       async platformStatus() {
         return { browserOnline: false, platformOpen: false, pages: 0 }

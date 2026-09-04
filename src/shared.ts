@@ -13,6 +13,9 @@ export type LoginStatusSource = typeof LOGIN_STATUS_SOURCES[number]
 export const BROWSER_DATA_DIRECTORY_ORIGINS = ['plugin-created', 'custom', 'legacy'] as const
 export type BrowserDataDirectoryOrigin = typeof BROWSER_DATA_DIRECTORY_ORIGINS[number]
 
+export const BROWSER_PROFILE_ORIGINS = ['plugin-created', 'discovered', 'legacy'] as const
+export type BrowserProfileOrigin = typeof BROWSER_PROFILE_ORIGINS[number]
+
 export const KEEP_ALIVE_RESULTS = ['success', 'invalid', 'unknown', 'error'] as const
 export type KeepAliveResult = typeof KEEP_ALIVE_RESULTS[number]
 
@@ -42,14 +45,25 @@ export interface BrowserDataDirectory {
   archivedAt?: string
 }
 
+export interface BrowserProfile {
+  id: string
+  browserDataDirectoryId: string
+  directoryName: string
+  name: string
+  userIdentifier: string
+  origin: BrowserProfileOrigin
+  createdAt: string
+  updatedAt: string
+}
+
 export interface PlatformAccount {
   id: string
   name: string
   platformName: string
-  accountLabel: string
   shopUrl: string
   loginUrl: string
   browserDataDirectoryId: string
+  browserProfileId: string
   agentInstructions: string
   loginState: LoginState
   loginCheckState: LoginCheckState
@@ -67,10 +81,10 @@ export interface PlatformAccount {
 export interface PlatformAccountInput {
   name: string
   platformName: string
-  accountLabel?: string
   shopUrl?: string
   loginUrl?: string
   browserDataDirectoryId?: string
+  browserProfileId?: string
   agentInstructions?: string
 }
 
@@ -78,10 +92,26 @@ export interface NewBrowserDataDirectoryInput {
   name?: string
   browser?: BrowserKind
   path?: string
+  profileUserIdentifier?: string
 }
 
 export type BrowserDirectorySelection =
-  | { mode: 'existing', id: string }
+  | {
+      mode: 'existing'
+      id: string
+      profileDirectory: string
+      profileName?: string
+      profileUserIdentifier?: string
+    }
+  | {
+      mode: 'discovered'
+      browser: BrowserKind
+      path: string
+      name?: string
+      profileDirectory: string
+      profileName?: string
+      profileUserIdentifier?: string
+    }
   | { mode: 'new', directory?: NewBrowserDataDirectoryInput }
 
 export interface CookieSyncStatus {
@@ -94,6 +124,8 @@ export interface CookieSyncStatus {
 export interface BrowserDirectoryStatus {
   online: boolean
   pages: number
+  onlineProfileIds: string[]
+  onlineProfileNames: string[]
   pid?: number
   startedAt?: string
   cookieSync: CookieSyncStatus
@@ -113,14 +145,46 @@ export interface PublicBrowserDataDirectory extends BrowserDataDirectory {
   status: BrowserDirectoryStatus
 }
 
+export interface PublicBrowserProfile extends BrowserProfile {
+  accountCount: number
+  activeAccountCount: number
+  archivedAccountCount: number
+  exists: boolean
+  online: boolean
+  cookieSync: CookieSyncStatus
+}
+
 export interface PublicPlatformAccount extends PlatformAccount {
   directory: BrowserDataDirectory
+  profile: BrowserProfile
   status: PlatformStatus
 }
 
+export type BrowserDirectoryDiscoverySource = 'standard' | 'registered' | 'manual' | 'scan'
+
+export interface DiscoveredBrowserProfile {
+  directoryName: string
+  name: string
+  userIdentifier: string
+  registeredProfileId?: string
+  accountCount: number
+}
+
+export interface DiscoveredBrowserDataDirectory {
+  key: string
+  name: string
+  browser: BrowserKind
+  path: string
+  source: BrowserDirectoryDiscoverySource
+  registeredDirectoryId?: string
+  profiles: DiscoveredBrowserProfile[]
+}
+
 export interface AccountDocument {
-  version: 3
+  version: 5
+  nextAccountNumber: number
   browserDataDirectories: BrowserDataDirectory[]
+  browserProfiles: BrowserProfile[]
   accounts: PlatformAccount[]
 }
 
@@ -130,17 +194,6 @@ export interface LoginCheckResult {
   finalUrl?: string
   checkedAt: string
 }
-
-export const PLATFORM_PRESETS = [
-  { name: '淘宝', shopUrl: 'https://myseller.taobao.com/', loginUrl: 'https://myseller.taobao.com/' },
-  { name: '天猫', shopUrl: 'https://myseller.taobao.com/', loginUrl: 'https://myseller.taobao.com/' },
-  { name: '1688', shopUrl: 'https://work.1688.com/', loginUrl: 'https://work.1688.com/' },
-  { name: 'Alibaba.com', shopUrl: 'https://seller.alibaba.com/', loginUrl: 'https://seller.alibaba.com/' },
-  { name: 'Shopify', shopUrl: 'https://admin.shopify.com/', loginUrl: 'https://admin.shopify.com/' },
-  { name: '抖音电商', shopUrl: '', loginUrl: '' },
-  { name: '拼多多', shopUrl: '', loginUrl: '' },
-  { name: 'Amazon', shopUrl: '', loginUrl: '' },
-] as const
 
 export function browserLabel(browser: BrowserKind): string {
   return browser === 'edge' ? 'Microsoft Edge' : 'Google Chrome'

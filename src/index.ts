@@ -7,6 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { apiRoute, createApiHandler } from './api.js'
 import { BrowserManager } from './browser.js'
+import { BrowserDiscovery } from './discovery.js'
 import { KeepAliveScheduler } from './maintenance.js'
 import { PlatformSessionService } from './service.js'
 import { AccountRepository } from './store.js'
@@ -48,6 +49,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(() => () => browser.dispose(), 'platform-manager: browser lifecycle')
 
   const scheduler = new KeepAliveScheduler(repository, browser)
+  const discovery = new BrowserDiscovery()
   const logger = ctx.logger('platform-manager')
   ctx.interval(() => {
     void scheduler.tick().catch(error => logger.error(error))
@@ -58,7 +60,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   registerTools(ctx, repository, browser)
   ctx.effect(() => ctx.webServer.register({
     ...apiRoute,
-    handler: createApiHandler(repository, browser, scheduler, ctx.directoryPicker),
+    handler: createApiHandler(repository, browser, scheduler, ctx.directoryPicker, discovery),
   }), 'platform-manager: local API')
 }
 

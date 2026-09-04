@@ -21,9 +21,9 @@ export class KeepAliveScheduler {
       const due = await this.repository.dueKeepAliveAccounts(now)
       const groups = new Map<string, PlatformAccount[]>()
       for (const account of due) {
-        const accounts = groups.get(account.browserDataDirectoryId) || []
+        const accounts = groups.get(account.browserProfileId) || []
         accounts.push(account)
-        groups.set(account.browserDataDirectoryId, accounts)
+        groups.set(account.browserProfileId, accounts)
       }
       for (const accounts of groups.values()) await this.runGroup(accounts)
     } finally {
@@ -34,15 +34,16 @@ export class KeepAliveScheduler {
   async runNow(accountId: string): Promise<LoginCheckResult> {
     const account = await this.repository.get(accountId)
     const directory = await this.repository.directoryForAccount(account)
-    const wasOnline = await this.browser.isOnline(directory)
+    const profile = await this.repository.profileForAccount(account)
+    const wasProfileOnline = await this.browser.isOnline(directory, profile)
     try {
-      const result = await this.browser.checkLogin(account, directory, true)
+      const result = await this.browser.checkLogin(account, directory, profile, true)
       await this.repository.recordLoginCheck(account.id, result)
       await this.repository.recordKeepAliveRun(account.id, keepAliveResult(result), result.message)
       return result
     } finally {
-      if (!wasOnline && account.keepAlive.closeAfterRun) {
-        await this.browser.close(directory).catch(() => undefined)
+      if (!wasProfileOnline && account.keepAlive.closeAfterRun) {
+        await this.browser.closeProfile(directory, profile).catch(() => undefined)
       }
     }
   }
@@ -50,16 +51,17 @@ export class KeepAliveScheduler {
   private async runGroup(accounts: PlatformAccount[]): Promise<void> {
     if (!accounts.length) return
     const directory = await this.repository.getDirectory(accounts[0].browserDataDirectoryId)
-    const wasOnline = await this.browser.isOnline(directory)
+    const profile = await this.repository.getProfile(accounts[0].browserProfileId)
+    const wasProfileOnline = await this.browser.isOnline(directory, profile)
     try {
       for (const account of accounts) {
-        const result = await this.browser.checkLogin(account, directory, true)
+        const result = await this.browser.checkLogin(account, directory, profile, true)
         await this.repository.recordLoginCheck(account.id, result)
         await this.repository.recordKeepAliveRun(account.id, keepAliveResult(result), result.message)
       }
     } finally {
-      if (!wasOnline && accounts.every(account => account.keepAlive.closeAfterRun)) {
-        await this.browser.close(directory).catch(() => undefined)
+      if (!wasProfileOnline && accounts.every(account => account.keepAlive.closeAfterRun)) {
+        await this.browser.closeProfile(directory, profile).catch(() => undefined)
       }
     }
   }

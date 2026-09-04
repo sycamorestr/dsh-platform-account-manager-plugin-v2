@@ -1,6 +1,6 @@
 {
   "name": "dsh-platform-account-manager-plugin",
-  "version": "0.3.1",
+  "version": "0.5.0",
   "description": "Local-first platform account and persistent browser-session manager for DeepSeek Harness",
   "type": "module",
   "main": "lib/index.js",

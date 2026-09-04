@@ -87,6 +87,11 @@ export const styles = `
 .sam_notice svg,
 .sam_error svg { margin-top: 1px; flex: none; }
 .sam_toolbar { justify-content: space-between; min-height: 32px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.sam_toolbarActions { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.sam_searchBox { width: min(360px, 48vw); height: 34px; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 6px; padding: 0 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-tertiary); }
+.sam_searchBox:focus-within { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.sam_searchBox input { min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
+.sam_searchBox input::placeholder { color: var(--dsw-alias-label-tertiary); }
 
 .sam_directoryList { display: flex; flex-direction: column; gap: 12px; }
 .sam_directoryGroup { overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-3); }
@@ -102,6 +107,7 @@ export const styles = `
 .sam_directoryIcon { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); }
 .sam_directoryIdentity,
 .sam_accountIdentity { min-width: 0; }
+.sam_accountId { flex: none; padding: 1px 5px; border-radius: 4px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; line-height: 17px; }
 .sam_nameLine { min-width: 0; gap: 7px; flex-wrap: wrap; }
 .sam_directoryHeader h3,
 .sam_accountIdentity strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 20px; font-weight: 650; }
@@ -121,6 +127,12 @@ export const styles = `
 
 .sam_accountList,
 .sam_archived ul { margin: 0; padding: 0; list-style: none; }
+.sam_profileGroups { display: flex; flex-direction: column; }
+.sam_profileGroup + .sam_profileGroup { border-top: 1px solid var(--dsw-alias-border-l2); }
+.sam_profileHeader { min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 7px 14px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font-size: 11px; }
+.sam_profileHeader strong { color: var(--dsw-alias-label-primary); font-size: 12px; }
+.sam_profileHeader span { color: var(--dsw-alias-label-tertiary); }
+.sam_profileHeader span:last-child { margin-left: auto; }
 .sam_accountRow { min-height: 64px; display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 12px; padding: 10px 12px 10px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
 .sam_accountRow:last-child { border-bottom: 0; }
 .sam_accountRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
@@ -136,6 +148,7 @@ export const styles = `
 .sam_keepAliveMark { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 5px; color: var(--dsw-alias-label-tertiary); }
 .sam_keepAliveMark[data-active="true"] { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-state-success-primary); }
 .sam_directoryEmpty { padding: 16px; color: var(--dsw-alias-label-tertiary); text-align: center; font-size: 12px; }
+.sam_searchEmpty { min-height: 80px; display: grid; place-items: center; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 8px; }
 
 .sam_empty { min-height: 210px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 8px; padding: 24px; color: var(--dsw-alias-label-tertiary); text-align: center; }
 .sam_empty h3 { margin-top: 10px; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 21px; }
@@ -161,6 +174,8 @@ export const styles = `
 .sam_fieldGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .sam_field { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .sam_field[data-wide="true"] { grid-column: 1 / -1; }
+.sam_fieldGrid > [data-wide="true"] { grid-column: 1 / -1; }
+.sam_fieldAction { justify-content: flex-end; }
 .sam_field label,
 .sam_fieldset legend { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; font-weight: 550; }
 .sam_field input,
@@ -258,6 +273,9 @@ export const styles = `
   .sam_section { position: absolute; z-index: 2; inset: 64px 0 0; width: auto; max-width: none; padding: 14px; overflow-y: auto; background: var(--dsw-alias-bg-base); }
   .sam_pageHeader { align-items: flex-start; flex-direction: column; }
   .sam_pageHeader .sam_primaryButton { width: 100%; }
+  .sam_toolbar { align-items: stretch; flex-direction: column; gap: 8px; }
+  .sam_toolbarActions { width: 100%; }
+  .sam_searchBox { width: 100%; }
   .sam_directoryHeader { grid-template-columns: minmax(0, 1fr); }
   .sam_directoryIcon { display: none; }
   .sam_directoryActions { grid-column: 1; justify-content: flex-end; }
@@ -268,6 +286,7 @@ export const styles = `
   .sam_fieldGrid,
   .sam_runMeta { grid-template-columns: minmax(0, 1fr); }
   .sam_field[data-wide="true"] { grid-column: auto; }
+  .sam_fieldGrid > [data-wide="true"] { grid-column: auto; }
   .sam_inputAction { grid-template-columns: minmax(0, 1fr); }
   .sam_inputAction .sam_secondaryButton { width: 100%; }
   .sam_overlay { padding: 0; align-items: stretch; }

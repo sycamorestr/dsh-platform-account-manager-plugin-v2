@@ -7,6 +7,7 @@ import type {
   BrowserDataDirectory,
   BrowserDirectoryStatus,
   BrowserKind,
+  BrowserProfile,
   CookieSyncStatus,
   LoginCheckResult,
   PlatformAccount,
@@ -41,6 +42,22 @@ interface DevToolsTarget {
   webSocketDebuggerUrl?: string
 }
 
+interface DevToolsTargetInfo {
+  targetId: string
+  type: string
+  url: string
+  browserContextId?: string
+}
+
+interface ProfileRuntime {
+  profileId: string
+  profileDirectory: string
+  profileName: string
+  userIdentifier: string
+  browserContextId: string
+  lastTargetId?: string
+}
+
 interface BrowserRuntime {
   directoryId: string
   instanceId: string
@@ -49,19 +66,24 @@ interface BrowserRuntime {
   pid: number
   port: number
   startedAt: string
+  profiles: ProfileRuntime[]
 }
 
 interface RuntimeDocument {
-  version: 1
+  version: 3
   runtimes: BrowserRuntime[]
 }
 
 export interface TrustedBrowserConnection {
   accountId: string
   directoryId: string
+  profileId: string
+  profileDirectory: string
   instanceId: string
   browser: BrowserKind
   endpoint: string
+  browserContextId: string
+  targetId: string
 }
 
 export interface DevToolsCookie {
@@ -111,6 +133,20 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return await response.json() as T
 }
 
+function profileRuntimeRecord(value: unknown): ProfileRuntime | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const raw = value as Partial<ProfileRuntime>
+  if (
+    typeof raw.profileId !== 'string' ||
+    typeof raw.profileDirectory !== 'string' ||
+    typeof raw.profileName !== 'string' ||
+    typeof raw.userIdentifier !== 'string' ||
+    typeof raw.browserContextId !== 'string' ||
+    (raw.lastTargetId !== undefined && typeof raw.lastTargetId !== 'string')
+  ) return undefined
+  return raw as ProfileRuntime
+}
+
 function runtimeRecord(value: unknown): BrowserRuntime | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const raw = value as Partial<BrowserRuntime>
@@ -121,9 +157,10 @@ function runtimeRecord(value: unknown): BrowserRuntime | undefined {
     typeof raw.path !== 'string' ||
     !Number.isInteger(raw.pid) || Number(raw.pid) <= 0 ||
     !Number.isInteger(raw.port) || Number(raw.port) <= 0 || Number(raw.port) > 65535 ||
-    typeof raw.startedAt !== 'string' || !Number.isFinite(Date.parse(raw.startedAt))
+    typeof raw.startedAt !== 'string' || !Number.isFinite(Date.parse(raw.startedAt)) ||
+    !Array.isArray(raw.profiles)
   ) return undefined
-  return raw as BrowserRuntime
+  return { ...raw, profiles: raw.profiles.map(profileRuntimeRecord).filter((profile): profile is ProfileRuntime => Boolean(profile)) } as BrowserRuntime
 }
 
 function processExists(pid: number): boolean {
@@ -154,6 +191,7 @@ async function allocateLoopbackPort(): Promise<number> {
 
 export function buildLaunchArguments(
   directory: BrowserDataDirectory,
+  profile: BrowserProfile,
   port: number,
   url: string,
   minimized = false,
@@ -163,6 +201,7 @@ export function buildLaunchArguments(
     '--remote-debugging-address=127.0.0.1',
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${directory.path}`,
+    `--profile-directory=${profile.directoryName}`,
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-mode',
@@ -170,6 +209,15 @@ export function buildLaunchArguments(
     '--new-window',
     url,
   ]
+}
+
+export function buildProfileActivationUrl(value: string, markerId: string): string {
+  const url = new URL(value)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('browser URL must use http or https')
+  const hash = url.hash.slice(1)
+  const marker = `dsh-profile=${encodeURIComponent(markerId)}`
+  url.hash = hash ? `${hash}${hash.includes('?') ? '&' : '?'}${marker}` : marker
+  return url.toString()
 }
 
 export function persistentCookieParam(cookie: DevToolsCookie, expires: number): PersistentCookieParam {
@@ -194,7 +242,11 @@ export function persistentCookieParam(cookie: DevToolsCookie, expires: number): 
 
 class CdpSession {
   private nextId = 1
-  private pending = new Map<number, { resolve: (value: unknown) => void, reject: (error: Error) => void }>()
+  private pending = new Map<number, {
+    resolve: (value: unknown) => void
+    reject: (error: Error) => void
+    timeout: ReturnType<typeof setTimeout>
+  }>()
 
   private constructor(private socket: WebSocket) {
     socket.addEventListener('message', event => {
@@ -204,6 +256,7 @@ class CdpSession {
         const pending = this.pending.get(message.id)
         if (!pending) return
         this.pending.delete(message.id)
+        clearTimeout(pending.timeout)
         if (message.error) pending.reject(new Error(message.error.message || 'CDP command failed'))
         else pending.resolve(message.result)
       } catch {
@@ -211,7 +264,10 @@ class CdpSession {
       }
     })
     socket.addEventListener('close', () => {
-      for (const pending of this.pending.values()) pending.reject(new Error('CDP connection closed'))
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timeout)
+        pending.reject(new Error('CDP connection closed'))
+      }
       this.pending.clear()
     })
   }
@@ -234,17 +290,20 @@ class CdpSession {
 
   async send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     const id = this.nextId++
-    const result = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: value => resolve(value as T), reject })
-    })
-    this.socket.send(JSON.stringify({ id, method, params }))
-    return await Promise.race([
-      result,
-      delay(10000).then(() => {
+    return await new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
         this.pending.delete(id)
-        throw new Error(`CDP command timed out: ${method}`)
-      }),
-    ])
+        reject(new Error(`CDP command timed out: ${method}`))
+      }, 10000)
+      this.pending.set(id, { resolve: value => resolve(value as T), reject, timeout })
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }))
+      } catch (error) {
+        clearTimeout(timeout)
+        this.pending.delete(id)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
   }
 
   close(): void {
@@ -256,7 +315,7 @@ export class BrowserManager {
   private runtimes = new Map<string, BrowserRuntime>()
   private cookieSync = new Map<string, CookieSyncStatus>()
   private persistenceLoops = new Map<string, AbortController>()
-  private directoryLocks = new Map<string, Promise<void>>()
+  private locks = new Map<string, Promise<void>>()
   private runtimeWriteQueue: Promise<void> = Promise.resolve()
   private browserPaths: BrowserPaths
   private cookieRetentionSeconds: number
@@ -268,22 +327,33 @@ export class BrowserManager {
   }
 
   async init(): Promise<void> {
-    let document: RuntimeDocument = { version: 1, runtimes: [] }
+    let document: RuntimeDocument = { version: 3, runtimes: [] }
     try {
       const parsed = JSON.parse(await readFile(this.repository.runtimeFilename, 'utf8')) as Partial<RuntimeDocument>
-      if (parsed.version === 1 && Array.isArray(parsed.runtimes)) {
-        document = { version: 1, runtimes: parsed.runtimes.map(runtimeRecord).filter((value): value is BrowserRuntime => Boolean(value)) }
+      if (parsed.version === 3 && Array.isArray(parsed.runtimes)) {
+        document = { version: 3, runtimes: parsed.runtimes.map(runtimeRecord).filter((value): value is BrowserRuntime => Boolean(value)) }
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
     }
     const directories = new Map((await this.repository.listDirectories()).map(directory => [directory.id, directory]))
+    const profiles = new Map((await this.repository.listProfiles()).map(profile => [profile.id, profile]))
     for (const runtime of document.runtimes) {
       const directory = directories.get(runtime.directoryId)
       if (!directory || directory.browser !== runtime.browser || directory.path !== runtime.path) continue
       if (await this.runtimeIsHealthy(runtime)) {
+        const contexts = new Set((await this.targetInfos(runtime.port)).map(target => target.browserContextId).filter(Boolean))
+        runtime.profiles = runtime.profiles.filter(profileRuntime => {
+          const profile = profiles.get(profileRuntime.profileId)
+          return Boolean(profile && profile.browserDataDirectoryId === directory.id
+            && profile.directoryName === profileRuntime.profileDirectory
+            && contexts.has(profileRuntime.browserContextId))
+        })
         this.runtimes.set(directory.id, runtime)
-        this.startCookiePersistence(directory)
+        for (const profileRuntime of runtime.profiles) {
+          const profile = profiles.get(profileRuntime.profileId)
+          if (profile) this.startCookiePersistence(directory, profile)
+        }
       }
     }
     await this.persistRuntimes()
@@ -296,27 +366,34 @@ export class BrowserManager {
 
   async directoryStatus(directory: BrowserDataDirectory): Promise<BrowserDirectoryStatus> {
     const runtime = await this.activeRuntime(directory)
-    if (!runtime) return { online: false, pages: 0, cookieSync: this.cookieStatus(directory.id) }
+    if (!runtime) return { online: false, pages: 0, onlineProfileIds: [], onlineProfileNames: [], cookieSync: this.cookieStatus() }
     try {
       const pages = await this.targets(runtime.port)
       return {
         online: true,
         pages: pages.length,
+        onlineProfileIds: runtime.profiles.map(profile => profile.profileId),
+        onlineProfileNames: runtime.profiles.map(profile => profile.userIdentifier),
         pid: runtime.pid,
         startedAt: runtime.startedAt,
-        cookieSync: this.cookieStatus(directory.id),
+        cookieSync: this.cookieStatus(),
       }
     } catch {
       await this.removeRuntime(directory.id, runtime.instanceId)
-      return { online: false, pages: 0, cookieSync: this.cookieStatus(directory.id) }
+      return { online: false, pages: 0, onlineProfileIds: [], onlineProfileNames: [], cookieSync: this.cookieStatus() }
     }
   }
 
-  async platformStatus(account: PlatformAccount, directory: BrowserDataDirectory): Promise<PlatformStatus> {
+  profileCookieStatus(profileId: string): CookieSyncStatus {
+    return this.cookieStatus(profileId)
+  }
+
+  async platformStatus(account: PlatformAccount, directory: BrowserDataDirectory, profile: BrowserProfile): Promise<PlatformStatus> {
     const runtime = await this.activeRuntime(directory)
-    if (!runtime) return { browserOnline: false, platformOpen: false, pages: 0 }
+    const profileRuntime = runtime && this.profileRuntime(runtime, profile)
+    if (!runtime || !profileRuntime) return { browserOnline: false, platformOpen: false, pages: 0 }
     try {
-      const pages = (await this.targets(runtime.port)).filter(target => this.belongsToAccount(target.url, account))
+      const pages = (await this.profileTargets(runtime, profileRuntime)).filter(target => this.belongsToAccount(target.url, account))
       return {
         browserOnline: true,
         platformOpen: pages.length > 0,
@@ -329,50 +406,66 @@ export class BrowserManager {
     }
   }
 
-  async open(account: PlatformAccount, directory: BrowserDataDirectory, requestedUrl?: string): Promise<PlatformStatus> {
-    return await this.withDirectoryLock(directory.id, async () => {
+  async open(account: PlatformAccount, directory: BrowserDataDirectory, profile: BrowserProfile, requestedUrl?: string): Promise<PlatformStatus> {
+    return await this.withLock(`profile:${profile.id}`, async () => {
       const url = this.accountUrl(account, requestedUrl)
       let runtime = await this.activeRuntime(directory)
-      if (!runtime) {
-        runtime = await this.launch(directory, url, false)
-      } else {
-        const existing = (await this.targets(runtime.port)).find(target => this.sameDocument(target.url, url))
+      const profileRuntime = runtime && this.profileRuntime(runtime, profile)
+      if (runtime && profileRuntime) {
+        const existing = (await this.profileTargets(runtime, profileRuntime)).find(target => this.sameDocument(target.url, url))
         if (existing?.webSocketDebuggerUrl) await this.bringToFront(existing).catch(() => undefined)
-        else await this.createTarget(runtime.port, url)
+        else await this.openProfileTarget(directory, profile, url, false)
+      } else {
+        await this.openProfileTarget(directory, profile, url, false)
       }
       await this.repository.markOpened(account.id)
-      this.startCookiePersistence(directory)
-      return await this.platformStatus(account, directory)
+      this.startCookiePersistence(directory, profile)
+      return await this.platformStatus(account, directory, profile)
     })
   }
 
   async close(directory: BrowserDataDirectory): Promise<void> {
-    await this.withDirectoryLock(directory.id, async () => {
+    await this.withLock(`root:${directory.id}`, async () => {
       const runtime = await this.activeRuntime(directory)
-      this.stopCookiePersistence(directory.id)
       if (!runtime) return
-      await this.persistSessionCookies(directory).catch(() => undefined)
-      try {
-        const version = await this.version(runtime.port)
-        const session = await CdpSession.connect(version.webSocketDebuggerUrl)
-        try {
-          await session.send('Browser.close')
-        } finally {
-          session.close()
-        }
-      } catch {
-        if (await this.runtimeIsHealthy(runtime)) throw new Error('browser did not accept the close command')
+      for (const profileRuntime of runtime.profiles) {
+        this.stopCookiePersistence(profileRuntime.profileId)
+        const profile = await this.repository.getProfile(profileRuntime.profileId).catch(() => undefined)
+        if (profile) await this.persistSessionCookies(directory, profile).catch(() => undefined)
       }
+      await this.closeRootRuntime(runtime)
       for (let attempt = 0; attempt < 30 && await this.runtimeIsHealthy(runtime); attempt += 1) await delay(100)
       await this.removeRuntime(directory.id, runtime.instanceId)
     })
   }
 
-  async persistSessionCookies(directory: BrowserDataDirectory): Promise<number> {
+  async closeProfile(directory: BrowserDataDirectory, profile: BrowserProfile): Promise<void> {
+    await this.withLock(`profile:${profile.id}`, async () => {
+      const runtime = await this.activeRuntime(directory)
+      const profileRuntime = runtime && this.profileRuntime(runtime, profile)
+      if (!runtime || !profileRuntime) return
+      this.stopCookiePersistence(profile.id)
+      await this.persistSessionCookies(directory, profile).catch(() => undefined)
+      const targets = await this.profileTargets(runtime, profileRuntime)
+      for (const target of targets) await this.closeTarget(runtime.port, target.id).catch(() => undefined)
+      runtime.profiles = runtime.profiles.filter(candidate => candidate.profileId !== profile.id)
+      if (runtime.profiles.length) await this.persistRuntimes()
+      else await this.withLock(`root:${directory.id}`, async () => {
+        await this.closeRootRuntime(runtime)
+        await this.removeRuntime(directory.id, runtime.instanceId)
+      })
+    })
+  }
+
+  async persistSessionCookies(directory: BrowserDataDirectory, profile: BrowserProfile): Promise<number> {
     const runtime = await this.activeRuntime(directory)
     if (!runtime) return 0
+    const profileRuntime = this.profileRuntime(runtime, profile)
+    if (!profileRuntime) return 0
     try {
-      const session = await CdpSession.connect((await this.version(runtime.port)).webSocketDebuggerUrl)
+      const target = (await this.profileTargets(runtime, profileRuntime)).find(candidate => candidate.webSocketDebuggerUrl)
+      if (!target?.webSocketDebuggerUrl) throw new Error('browser profile has no page target for cookie synchronization')
+      const session = await CdpSession.connect(target.webSocketDebuggerUrl)
       try {
         const result = await session.send<{ cookies: DevToolsCookie[] }>('Storage.getCookies')
         const cookies = result.cookies.filter(cookie => cookie.session && !cookie.partitionKeyOpaque)
@@ -387,7 +480,7 @@ export class BrowserManager {
           }
         }
         if (cookies.length && !persisted) throw new Error('Chromium rejected all session cookies')
-        this.cookieSync.set(directory.id, {
+        this.cookieSync.set(profile.id, {
           state: 'ok',
           lastSyncedAt: new Date().toISOString(),
           persistedCount: persisted,
@@ -397,7 +490,7 @@ export class BrowserManager {
         session.close()
       }
     } catch (error) {
-      this.cookieSync.set(directory.id, {
+      this.cookieSync.set(profile.id, {
         state: 'error',
         lastSyncedAt: new Date().toISOString(),
         persistedCount: 0,
@@ -407,24 +500,19 @@ export class BrowserManager {
     }
   }
 
-  async checkLogin(account: PlatformAccount, directory: BrowserDataDirectory, minimized = false): Promise<LoginCheckResult> {
+  async checkLogin(account: PlatformAccount, directory: BrowserDataDirectory, profile: BrowserProfile, minimized = false): Promise<LoginCheckResult> {
     const checkedAt = new Date().toISOString()
     const probeUrl = account.shopUrl || account.loginUrl
     if (!probeUrl) return { state: 'unknown', message: 'No platform or login URL is configured.', checkedAt }
-    return await this.withDirectoryLock(directory.id, async () => {
+    return await this.withLock(`profile:${profile.id}`, async () => {
       let target: DevToolsTarget | undefined
-      let temporaryTarget = false
+      const wasOnline = await this.isOnline(directory, profile)
       try {
-        let runtime = await this.activeRuntime(directory)
-        if (!runtime) {
-          runtime = await this.launch(directory, probeUrl, minimized)
-          target = await this.waitForLaunchedTarget(runtime.port, account, probeUrl)
-        } else {
-          target = await this.createTarget(runtime.port, probeUrl)
-          temporaryTarget = true
-        }
+        target = await this.openProfileTarget(directory, profile, probeUrl, minimized)
+        const runtime = await this.activeRuntime(directory)
+        if (!runtime) throw new Error('browser data directory went offline during login checking')
         const settled = await this.waitForTarget(runtime.port, target.id)
-        await this.persistSessionCookies(directory)
+        await this.persistSessionCookies(directory, profile)
         return this.classifyLogin(account, settled.url, checkedAt)
       } catch (error) {
         return {
@@ -433,7 +521,7 @@ export class BrowserManager {
           checkedAt,
         }
       } finally {
-        if (target && temporaryTarget) {
+        if (target && wasOnline) {
           const runtime = await this.activeRuntime(directory)
           if (runtime) await this.closeTarget(runtime.port, target.id).catch(() => undefined)
         }
@@ -441,39 +529,92 @@ export class BrowserManager {
     })
   }
 
-  async trustedConnection(account: PlatformAccount, directory: BrowserDataDirectory): Promise<TrustedBrowserConnection> {
+  async trustedConnection(account: PlatformAccount, directory: BrowserDataDirectory, profile: BrowserProfile): Promise<TrustedBrowserConnection> {
     const runtime = await this.activeRuntime(directory)
     if (!runtime) throw new Error('browser data directory is offline')
+    const profileRuntime = this.profileRuntime(runtime, profile)
+    if (!profileRuntime) throw new Error('browser profile is offline')
+    const target = (await this.profileTargets(runtime, profileRuntime)).find(candidate => this.belongsToAccount(candidate.url, account))
+      || (await this.profileTargets(runtime, profileRuntime))[0]
+    if (!target) throw new Error('browser profile has no trusted page target')
     return {
       accountId: account.id,
       directoryId: directory.id,
+      profileId: profile.id,
+      profileDirectory: profile.directoryName,
       instanceId: runtime.instanceId,
       browser: runtime.browser,
       endpoint: `http://127.0.0.1:${runtime.port}`,
+      browserContextId: profileRuntime.browserContextId,
+      targetId: target.id,
     }
   }
 
-  async isOnline(directory: BrowserDataDirectory): Promise<boolean> {
-    return Boolean(await this.activeRuntime(directory))
+  async isOnline(directory: BrowserDataDirectory, profile?: BrowserProfile): Promise<boolean> {
+    const runtime = await this.activeRuntime(directory)
+    return Boolean(runtime && (!profile || this.profileRuntime(runtime, profile)))
   }
 
-  private cookieStatus(directoryId: string): CookieSyncStatus {
-    return { ...(this.cookieSync.get(directoryId) || { state: 'idle', persistedCount: 0 }) }
+  private cookieStatus(profileId?: string): CookieSyncStatus {
+    const status = profileId ? this.cookieSync.get(profileId) : undefined
+    return { ...(status || { state: 'idle', persistedCount: 0 }) }
   }
 
-  private async launch(directory: BrowserDataDirectory, url: string, minimized: boolean): Promise<BrowserRuntime> {
-    await mkdir(directory.path, { recursive: true, mode: 0o700 })
-    const executable = await this.resolveExecutable(directory.browser)
-    const port = await allocateLoopbackPort()
-    const child = spawn(executable, buildLaunchArguments(directory, port, this.safeUrl(url, true), minimized), {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false,
+  private async openProfileTarget(
+    directory: BrowserDataDirectory,
+    profile: BrowserProfile,
+    url: string,
+    minimized: boolean,
+  ): Promise<DevToolsTarget> {
+    const requestedUrl = this.safeUrl(url, false)
+    const markerUrl = buildProfileActivationUrl(requestedUrl, randomUUID())
+    const { runtime, existingTargetIds } = await this.withLock(`root:${directory.id}`, async () => {
+      const existing = await this.activeRuntime(directory)
+      if (!existing) return {
+        runtime: await this.launchRoot(directory, profile, markerUrl, minimized),
+        existingTargetIds: new Set<string>(),
+      }
+      const existingTargetIds = new Set((await this.targets(existing.port)).map(target => target.id))
+      await this.spawnProfileInvocation(directory, profile, existing.port, markerUrl, minimized)
+      return { runtime: existing, existingTargetIds }
     })
-    const spawnError = new Promise<never>((_resolve, reject) => child.once('error', reject))
-    const ready = this.waitForEndpoint(port)
+    const marker = await this.waitForActivationTarget(runtime.port, markerUrl, requestedUrl, existingTargetIds)
+    const browserContextId = await this.contextIdForTarget(runtime.port, marker.id)
+    let profileRuntime = runtime.profiles.find(candidate => candidate.profileId === profile.id)
+    if (!profileRuntime) {
+      profileRuntime = {
+        profileId: profile.id,
+        profileDirectory: profile.directoryName,
+        profileName: profile.name,
+        userIdentifier: profile.userIdentifier,
+        browserContextId,
+        lastTargetId: marker.id,
+      }
+      runtime.profiles.push(profileRuntime)
+    } else {
+      profileRuntime.profileDirectory = profile.directoryName
+      profileRuntime.profileName = profile.name
+      profileRuntime.userIdentifier = profile.userIdentifier
+      profileRuntime.browserContextId = browserContextId
+      profileRuntime.lastTargetId = marker.id
+    }
+    await this.navigateTarget(marker, requestedUrl)
+    await this.persistRuntimes()
+    this.startCookiePersistence(directory, profile)
+    return marker
+  }
+
+  private async launchRoot(
+    directory: BrowserDataDirectory,
+    profile: BrowserProfile,
+    markerUrl: string,
+    minimized: boolean,
+  ): Promise<BrowserRuntime> {
+    await mkdir(directory.path, { recursive: true, mode: 0o700 })
+    const port = await allocateLoopbackPort()
+    const child = await this.spawnProfileInvocation(directory, profile, port, markerUrl, minimized)
     try {
-      await Promise.race([ready, spawnError])
+      await this.waitForEndpoint(port)
     } catch (error) {
       child.kill()
       throw error
@@ -488,17 +629,33 @@ export class BrowserManager {
       pid: browserPid,
       port,
       startedAt: new Date().toISOString(),
+      profiles: [],
     }
     this.runtimes.set(directory.id, runtime)
     await this.persistRuntimes()
-    if (child.pid === browserPid) {
-      child.once('exit', () => {
-        void this.removeRuntime(directory.id, runtime.instanceId)
-      })
-    }
-    child.unref()
-    this.startCookiePersistence(directory)
+    if (child.pid === browserPid) child.once('exit', () => void this.removeRuntime(directory.id, runtime.instanceId))
     return runtime
+  }
+
+  private async spawnProfileInvocation(
+    directory: BrowserDataDirectory,
+    profile: BrowserProfile,
+    port: number,
+    url: string,
+    minimized: boolean,
+  ) {
+    const executable = await this.resolveExecutable(directory.browser)
+    const child = spawn(executable, buildLaunchArguments(directory, profile, port, url, minimized), {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    })
+    await new Promise<void>((resolve, reject) => {
+      child.once('spawn', resolve)
+      child.once('error', reject)
+    })
+    child.unref()
+    return child
   }
 
   private async activeRuntime(directory: BrowserDataDirectory): Promise<BrowserRuntime | undefined> {
@@ -525,15 +682,16 @@ export class BrowserManager {
   }
 
   private async removeRuntime(directoryId: string, instanceId: string): Promise<void> {
-    if (this.runtimes.get(directoryId)?.instanceId !== instanceId) return
+    const runtime = this.runtimes.get(directoryId)
+    if (runtime?.instanceId !== instanceId) return
     this.runtimes.delete(directoryId)
-    this.stopCookiePersistence(directoryId)
+    for (const profile of runtime.profiles) this.stopCookiePersistence(profile.profileId)
     await this.persistRuntimes()
   }
 
   private async persistRuntimes(): Promise<void> {
     this.runtimeWriteQueue = this.runtimeWriteQueue.catch(() => undefined).then(async () => {
-      const document: RuntimeDocument = { version: 1, runtimes: [...this.runtimes.values()] }
+      const document: RuntimeDocument = { version: 3, runtimes: [...this.runtimes.values()] }
       await mkdir(dirname(this.repository.runtimeFilename), { recursive: true, mode: 0o700 })
       const temporary = `${this.repository.runtimeFilename}.${process.pid}.${randomUUID()}.tmp`
       await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
@@ -542,19 +700,20 @@ export class BrowserManager {
     await this.runtimeWriteQueue
   }
 
-  private startCookiePersistence(directory: BrowserDataDirectory): void {
-    if (this.persistenceLoops.has(directory.id)) return
+  private startCookiePersistence(directory: BrowserDataDirectory, profile: BrowserProfile): void {
+    if (this.persistenceLoops.has(profile.id)) return
     const controller = new AbortController()
     const startedAt = Date.now()
-    this.persistenceLoops.set(directory.id, controller)
+    this.persistenceLoops.set(profile.id, controller)
     void (async () => {
       while (!controller.signal.aborted) {
         try {
           const runtime = await this.activeRuntime(directory)
-          if (!runtime) break
-          await this.persistSessionCookies(directory)
+          if (!runtime || !this.profileRuntime(runtime, profile)) break
+          await this.persistSessionCookies(directory, profile)
         } catch {
-          if (!await this.activeRuntime(directory)) break
+          const runtime = await this.activeRuntime(directory)
+          if (!runtime || !this.profileRuntime(runtime, profile)) break
         }
         const interval = Date.now() - startedAt < FAST_COOKIE_SYNC_WINDOW_MS
           ? FAST_COOKIE_SYNC_INTERVAL_MS
@@ -562,28 +721,97 @@ export class BrowserManager {
         await delay(interval)
       }
     })().finally(() => {
-      if (this.persistenceLoops.get(directory.id) === controller) this.persistenceLoops.delete(directory.id)
+      if (this.persistenceLoops.get(profile.id) === controller) this.persistenceLoops.delete(profile.id)
     })
   }
 
-  private stopCookiePersistence(directoryId: string): void {
-    const controller = this.persistenceLoops.get(directoryId)
+  private stopCookiePersistence(profileId: string): void {
+    const controller = this.persistenceLoops.get(profileId)
     controller?.abort()
-    if (this.persistenceLoops.get(directoryId) === controller) this.persistenceLoops.delete(directoryId)
+    if (this.persistenceLoops.get(profileId) === controller) this.persistenceLoops.delete(profileId)
   }
 
-  private async withDirectoryLock<T>(directoryId: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.directoryLocks.get(directoryId) || Promise.resolve()
+  private profileRuntime(runtime: BrowserRuntime, profile: BrowserProfile): ProfileRuntime | undefined {
+    return runtime.profiles.find(candidate => candidate.profileId === profile.id
+      && candidate.profileDirectory === profile.directoryName)
+  }
+
+  private async withLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.locks.get(key) || Promise.resolve()
     let release!: () => void
     const current = new Promise<void>(resolve => { release = resolve })
     const chained = previous.then(() => current)
-    this.directoryLocks.set(directoryId, chained)
+    this.locks.set(key, chained)
     await previous
     try {
       return await operation()
     } finally {
       release()
-      if (this.directoryLocks.get(directoryId) === chained) this.directoryLocks.delete(directoryId)
+      if (this.locks.get(key) === chained) this.locks.delete(key)
+    }
+  }
+
+  private async closeRootRuntime(runtime: BrowserRuntime): Promise<void> {
+    try {
+      const session = await CdpSession.connect((await this.version(runtime.port)).webSocketDebuggerUrl)
+      try {
+        await session.send('Browser.close')
+      } finally {
+        session.close()
+      }
+    } catch {
+      if (await this.runtimeIsHealthy(runtime)) throw new Error('browser did not accept the close command')
+    }
+  }
+
+  private async waitForActivationTarget(
+    port: number,
+    markerUrl: string,
+    requestedUrl: string,
+    existingTargetIds: Set<string>,
+  ): Promise<DevToolsTarget> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const targets = (await this.targets(port)).filter(candidate => candidate.webSocketDebuggerUrl)
+      const target = targets.find(candidate => candidate.url === markerUrl)
+        || targets.find(candidate => !existingTargetIds.has(candidate.id) && this.sameDocument(candidate.url, requestedUrl))
+      if (target) return target
+      await delay(100)
+    }
+    throw new Error('browser opened the profile but did not expose its activation target')
+  }
+
+  private async contextIdForTarget(port: number, targetId: string): Promise<string> {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const target = (await this.targetInfos(port)).find(candidate => candidate.targetId === targetId)
+      if (target?.browserContextId) return target.browserContextId
+      await delay(100)
+    }
+    throw new Error('browser did not expose a Profile context for the activation target')
+  }
+
+  private async navigateTarget(target: DevToolsTarget, url: string): Promise<void> {
+    if (!target.webSocketDebuggerUrl) throw new Error('activation target has no DevTools endpoint')
+    const session = await CdpSession.connect(target.webSocketDebuggerUrl)
+    try {
+      await session.send('Page.navigate', { url: this.safeUrl(url, false) })
+    } finally {
+      session.close()
+    }
+  }
+
+  private async profileTargets(runtime: BrowserRuntime, profile: ProfileRuntime): Promise<DevToolsTarget[]> {
+    const [targets, infos] = await Promise.all([this.targets(runtime.port), this.targetInfos(runtime.port)])
+    const contexts = new Map(infos.map(info => [info.targetId, info.browserContextId]))
+    return targets.filter(target => contexts.get(target.id) === profile.browserContextId)
+  }
+
+  private async targetInfos(port: number): Promise<DevToolsTargetInfo[]> {
+    const session = await CdpSession.connect((await this.version(port)).webSocketDebuggerUrl)
+    try {
+      const result = await session.send<{ targetInfos: DevToolsTargetInfo[] }>('Target.getTargets')
+      return result.targetInfos
+    } finally {
+      session.close()
     }
   }
 
@@ -597,39 +825,6 @@ export class BrowserManager {
       }
     }
     throw new Error('browser did not expose its fixed debugging port within 20 seconds; close any browser already using this data directory and try again')
-  }
-
-  private async waitForLaunchedTarget(
-    port: number,
-    account: PlatformAccount,
-    requestedUrl: string,
-  ): Promise<DevToolsTarget> {
-    let fallback: DevToolsTarget | undefined
-    let fallbackSignature = ''
-    let stableCount = 0
-    for (let attempt = 0; attempt < 75; attempt += 1) {
-      const pages = await this.targets(port)
-      const preferred = pages.find(target => this.sameDocument(target.url, requestedUrl))
-        || pages.find(target => this.belongsToAccount(target.url, account))
-      if (preferred) return preferred
-
-      const webPages = pages.filter(target => Boolean(this.parseWebUrl(target.url)))
-      if (webPages.length === 1) {
-        fallback = webPages[0]
-        const signature = `${fallback.id}:${fallback.url}`
-        if (signature === fallbackSignature) stableCount += 1
-        else stableCount = 0
-        fallbackSignature = signature
-        if (stableCount >= 5) return fallback
-      } else {
-        fallback = undefined
-        fallbackSignature = ''
-        stableCount = 0
-      }
-      await delay(200)
-    }
-    if (fallback) return fallback
-    throw new Error('browser started but did not expose the platform tab for login checking')
   }
 
   private async waitForTarget(port: number, targetId: string): Promise<DevToolsTarget> {
@@ -708,12 +903,6 @@ export class BrowserManager {
   private async targets(port: number): Promise<DevToolsTarget[]> {
     const targets = await fetchJson<DevToolsTarget[]>(`http://127.0.0.1:${port}/json/list`)
     return targets.filter(target => target.type === 'page' && !target.url.startsWith('devtools://'))
-  }
-
-  private async createTarget(port: number, url: string): Promise<DevToolsTarget> {
-    return await fetchJson<DevToolsTarget>(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(this.safeUrl(url, true))}`, {
-      method: 'PUT',
-    })
   }
 
   private async closeTarget(port: number, targetId: string): Promise<void> {

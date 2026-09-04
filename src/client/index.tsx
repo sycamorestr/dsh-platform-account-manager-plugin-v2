@@ -18,6 +18,7 @@ import {
   Power,
   RefreshCw,
   RotateCw,
+  Search,
   ShieldCheck,
   Timer,
   Trash2,
@@ -25,10 +26,10 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  PLATFORM_PRESETS,
   browserLabel,
   type BrowserKind,
   type BrowserDirectorySelection,
+  type DiscoveredBrowserDataDirectory,
   type KeepAliveSettings,
   type LoginCheckResult,
   type PlatformAccountInput,
@@ -38,7 +39,7 @@ import {
 import { styles } from './styles.js'
 
 const NS = 'platformManagement'
-const STYLE_ID = 'dsh-platform-account-manager-plugin/styles-v3'
+const STYLE_ID = 'dsh-platform-account-manager-plugin/styles-v5'
 const API_URL = '/platform-account-manager/api/accounts'
 
 interface DirectorySnapshot {
@@ -47,13 +48,14 @@ interface DirectorySnapshot {
   archivedAccounts: PublicPlatformAccount[]
   directories: PublicBrowserDataDirectory[]
   archivedDirectories: PublicBrowserDataDirectory[]
+  availableDirectories: DiscoveredBrowserDataDirectory[]
   busyKeys: readonly string[]
   error?: string
 }
 
 interface ApiResponse<T = unknown> {
   ok: boolean
-  state?: Pick<DirectorySnapshot, 'accounts' | 'archivedAccounts' | 'directories' | 'archivedDirectories'>
+  state?: Pick<DirectorySnapshot, 'accounts' | 'archivedAccounts' | 'directories' | 'archivedDirectories' | 'availableDirectories'>
   result?: T
   error?: string
 }
@@ -77,10 +79,13 @@ interface ManagerProps {
   manualConfirmLogin: (id: string) => Promise<unknown>
   setKeepAlive: (id: string, keepAlive: Partial<KeepAliveSettings>) => Promise<unknown>
   runKeepAlive: (id: string) => Promise<unknown>
-  syncCookies: (directoryId: string) => Promise<unknown>
+  syncCookies: (profileId: string) => Promise<unknown>
   pickDirectory: () => Promise<string | null>
+  inspectDirectory: (browser: BrowserKind, path: string) => Promise<DiscoveredBrowserDataDirectory | undefined>
+  scanComputer: () => Promise<unknown>
   revealDirectory: (directoryId: string) => Promise<unknown>
   renameDirectory: (directoryId: string, name: string) => Promise<unknown>
+  renameProfile: (profileId: string, userIdentifier: string) => Promise<unknown>
   archiveDirectory: (directoryId: string) => Promise<unknown>
   restoreDirectory: (directoryId: string) => Promise<unknown>
   deleteDirectory: (directoryId: string, deleteLocalData: boolean, confirmationName?: string) => Promise<unknown>
@@ -93,6 +98,7 @@ class PlatformDirectory {
     archivedAccounts: [],
     directories: [],
     archivedDirectories: [],
+    availableDirectories: [],
     busyKeys: [],
   }
   private listeners = new Set<() => void>()
@@ -168,6 +174,7 @@ class PlatformDirectory {
       archivedAccounts: data.state.archivedAccounts || [],
       directories: data.state.directories || [],
       archivedDirectories: data.state.archivedDirectories || [],
+      availableDirectories: data.state.availableDirectories || [],
       busyKeys: [...this.busy],
     })
   }
@@ -182,16 +189,16 @@ class PlatformDirectory {
 const zh = {
   nav: '平台管理',
   title: '平台管理',
-  subtitle: '统一管理平台账号、浏览器数据目录与登录状态',
+  subtitle: '统一管理平台账号、浏览器数据根目录、用户配置与登录状态',
   add: '新增账号',
   refresh: '刷新状态',
   summary: '{accounts} 个账号 · {directories} 个浏览器数据目录',
   privacy: '账号密码不会被插件保存；Cookie、站点存储和浏览器配置仅保留在所选本机目录。',
   emptyTitle: '还没有平台账号',
-  emptyBody: '新增账号并选择一个浏览器数据目录。',
-  directory: '浏览器数据目录',
-  newDirectory: '新建数据目录',
-  existingDirectory: '复用已有目录',
+  emptyBody: '新增账号并选择浏览器数据根目录和用户配置。',
+  directory: '浏览器数据根目录与用户配置',
+  newDirectory: '新建数据根目录',
+  existingDirectory: '复用已有数据根目录',
   directoryName: '目录名称',
   directoryPath: '自定义目录地址（可选）',
   chooseDirectory: '选择目录',
@@ -216,8 +223,8 @@ const zh = {
   platformPlaceholder: '例如：淘宝、飞书、Shopify',
   accountName: '账号名称',
   accountNamePlaceholder: '用于区分这个账号',
-  accountLabel: '账号标识（可选）',
-  accountLabelPlaceholder: '手机号、员工号或备注名',
+  profileUserIdentifier: '用户标识',
+  profileUserIdentifierPlaceholder: '例如：运营小王、店铺 A 专用',
   backendUrl: '平台后台地址',
   loginUrl: '登录地址',
   urlRequired: '后台地址和登录地址至少填写一个。',
@@ -225,6 +232,16 @@ const zh = {
   agentPlaceholder: '提供账号用途、业务范围等上下文，不作为权限控制。',
   browser: '浏览器',
   selectDirectory: '选择已有数据目录',
+  selectProfile: '浏览器用户配置（Profile）',
+  profile: '用户配置',
+  inspectDirectory: '检查其他数据目录',
+  scanComputer: '扫描整台电脑',
+  searchAccounts: '搜索账号 ID、平台、账号名称或用户标识',
+  noSearchResults: '没有匹配的平台账号',
+  noProfiles: '该数据目录没有可用的用户配置。',
+  profileInUse: '该用户配置已绑定 {count} 个平台账号。它们会共享 Cookie 和站点存储。',
+  sameSiteProfileRisk: '同一用户配置中已有相同站点的账号，继续复用可能发生登录身份互相覆盖。',
+  activeProfile: '当前在线：{name}',
   create: '创建账号',
   save: '保存',
   cancel: '取消',
@@ -288,16 +305,16 @@ const zh = {
 const en: typeof zh = {
   nav: 'Platform management',
   title: 'Platform management',
-  subtitle: 'Manage platform accounts, browser data directories, and sign-in status',
+  subtitle: 'Manage platform accounts, browser data roots, profiles, and sign-in status',
   add: 'Add account',
   refresh: 'Refresh status',
   summary: '{accounts} accounts · {directories} browser data directories',
   privacy: 'Passwords are never stored. Cookies, site storage, and browser settings remain only in the selected local directory.',
   emptyTitle: 'No platform accounts',
-  emptyBody: 'Add an account and select a browser data directory.',
-  directory: 'Browser data directory',
-  newDirectory: 'New directory',
-  existingDirectory: 'Reuse directory',
+  emptyBody: 'Add an account and select a browser data root and profile.',
+  directory: 'Browser data root and profile',
+  newDirectory: 'New data root',
+  existingDirectory: 'Reuse data root',
   directoryName: 'Directory name',
   directoryPath: 'Custom directory path (optional)',
   chooseDirectory: 'Choose directory',
@@ -322,8 +339,8 @@ const en: typeof zh = {
   platformPlaceholder: 'For example: Shopify, Slack, Amazon',
   accountName: 'Account name',
   accountNamePlaceholder: 'A name that identifies this account',
-  accountLabel: 'Account label (optional)',
-  accountLabelPlaceholder: 'Phone, staff ID, or note',
+  profileUserIdentifier: 'User identifier',
+  profileUserIdentifierPlaceholder: 'For example: Store A operator',
   backendUrl: 'Platform backend URL',
   loginUrl: 'Login URL',
   urlRequired: 'Enter at least one backend or login URL.',
@@ -331,6 +348,16 @@ const en: typeof zh = {
   agentPlaceholder: 'Business context and intended use; this is not permission enforcement.',
   browser: 'Browser',
   selectDirectory: 'Select an existing directory',
+  selectProfile: 'Browser profile',
+  profile: 'Profile',
+  inspectDirectory: 'Inspect another data root',
+  scanComputer: 'Scan this computer',
+  searchAccounts: 'Search account ID, platform, account name, or user identifier',
+  noSearchResults: 'No matching platform accounts',
+  noProfiles: 'This data root has no usable browser profiles.',
+  profileInUse: 'This profile is already bound to {count} platform accounts. They share cookies and site storage.',
+  sameSiteProfileRisk: 'This profile already has an account for the same site. Reusing it may overwrite the signed-in identity.',
+  activeProfile: 'Active profile: {name}',
   create: 'Create account',
   save: 'Save',
   cancel: 'Cancel',
@@ -415,6 +442,12 @@ function hostname(value: string): string {
   }
 }
 
+function relatedHostname(left: string, right: string): boolean {
+  const a = left.toLowerCase()
+  const b = right.toLowerCase()
+  return Boolean(a && b && (a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`)))
+}
+
 function formatTime(value: string | undefined, never: string): string {
   if (!value) return never
   const date = new Date(value)
@@ -471,27 +504,29 @@ function Modal(props: { title: string, closeLabel: string, busy?: boolean, onClo
 interface AccountDraft {
   name: string
   platformName: string
-  accountLabel: string
+  profileUserIdentifier: string
   shopUrl: string
   loginUrl: string
   agentInstructions: string
   directoryMode: 'new' | 'existing'
-  existingDirectoryId: string
+  existingDirectoryKey: string
+  profileDirectory: string
   directoryName: string
   browser: BrowserKind
   directoryPath: string
 }
 
-function accountDraft(account: PublicPlatformAccount | undefined, directories: PublicBrowserDataDirectory[]): AccountDraft {
+function accountDraft(account: PublicPlatformAccount | undefined, directories: DiscoveredBrowserDataDirectory[]): AccountDraft {
   if (account) return {
     name: account.name,
     platformName: account.platformName,
-    accountLabel: account.accountLabel,
+    profileUserIdentifier: account.profile.userIdentifier,
     shopUrl: account.shopUrl,
     loginUrl: account.loginUrl,
     agentInstructions: account.agentInstructions,
     directoryMode: 'existing',
-    existingDirectoryId: account.browserDataDirectoryId,
+    existingDirectoryKey: directories.find(directory => directory.registeredDirectoryId === account.browserDataDirectoryId)?.key || '',
+    profileDirectory: account.profile.directoryName,
     directoryName: account.directory.name,
     browser: account.directory.browser,
     directoryPath: account.directory.path,
@@ -499,12 +534,13 @@ function accountDraft(account: PublicPlatformAccount | undefined, directories: P
   return {
     name: '',
     platformName: '',
-    accountLabel: '',
+    profileUserIdentifier: directories[0]?.profiles[0]?.userIdentifier || '',
     shopUrl: '',
     loginUrl: '',
     agentInstructions: '',
     directoryMode: directories.length ? 'existing' : 'new',
-    existingDirectoryId: directories[0]?.id || '',
+    existingDirectoryKey: directories[0]?.key || '',
+    profileDirectory: directories[0]?.profiles[0]?.directoryName || '',
     directoryName: '',
     browser: 'chrome',
     directoryPath: '',
@@ -513,28 +549,36 @@ function accountDraft(account: PublicPlatformAccount | undefined, directories: P
 
 function AccountModal(props: {
   account?: PublicPlatformAccount
-  directories: PublicBrowserDataDirectory[]
+  availableDirectories: DiscoveredBrowserDataDirectory[]
+  accounts: PublicPlatformAccount[]
+  platformNames: string[]
   manager: ManagerProps
   onClose: () => void
 }): ReactNode {
-  const { account, directories, manager, onClose } = props
-  const [form, setForm] = useState(() => accountDraft(account, directories))
+  const { account, availableDirectories, manager, onClose } = props
+  const [form, setForm] = useState(() => accountDraft(account, availableDirectories))
+  const [manualDirectories, setManualDirectories] = useState<DiscoveredBrowserDataDirectory[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string>()
   const t = manager.t
+  const directories = useMemo(() => {
+    const merged = new Map(availableDirectories.map(directory => [directory.key, directory]))
+    for (const directory of manualDirectories) merged.set(directory.key, directory)
+    return [...merged.values()]
+  }, [availableDirectories, manualDirectories])
+  const selectedDirectory = directories.find(directory => directory.key === form.existingDirectoryKey)
+  const selectedProfile = selectedDirectory?.profiles.find(profile => profile.directoryName === form.profileDirectory)
+  const boundAccounts = selectedDirectory?.registeredDirectoryId
+    ? props.accounts.filter(candidate => candidate.browserDataDirectoryId === selectedDirectory.registeredDirectoryId
+      && candidate.profile.directoryName === form.profileDirectory)
+    : []
+  const selectedHost = hostname(form.shopUrl || form.loginUrl)
+  const sameSiteRisk = boundAccounts.some(candidate => relatedHostname(
+    selectedHost,
+    hostname(candidate.shopUrl || candidate.loginUrl),
+  ))
   const set = <K extends keyof AccountDraft>(key: K, value: AccountDraft[K]) => setForm(current => ({ ...current, [key]: value }))
-  const setPlatform = (platformName: string) => {
-    setForm(current => {
-      const preset = PLATFORM_PRESETS.find(candidate => candidate.name.toLowerCase() === platformName.trim().toLowerCase())
-      return {
-        ...current,
-        platformName,
-        shopUrl: current.shopUrl || preset?.shopUrl || '',
-        loginUrl: current.loginUrl || preset?.loginUrl || '',
-      }
-    })
-  }
   const pick = async () => {
     setPicking(true)
     setError(undefined)
@@ -547,6 +591,50 @@ function AccountModal(props: {
       setPicking(false)
     }
   }
+  const inspect = async () => {
+    setPicking(true)
+    setError(undefined)
+    try {
+      const path = await manager.pickDirectory()
+      if (!path) return
+      const inspected = await manager.inspectDirectory(form.browser, path)
+      if (!inspected) return
+      setManualDirectories(current => [...current.filter(item => item.key !== inspected.key), inspected])
+      setForm(current => ({
+        ...current,
+        directoryMode: 'existing',
+        existingDirectoryKey: inspected.key,
+        profileDirectory: inspected.profiles[0]?.directoryName || '',
+        profileUserIdentifier: inspected.profiles[0]?.userIdentifier || '',
+        browser: inspected.browser,
+      }))
+    } catch (cause) {
+      setError(messageOf(cause))
+    } finally {
+      setPicking(false)
+    }
+  }
+  const scanComputer = async () => {
+    setPicking(true)
+    setError(undefined)
+    try {
+      await manager.scanComputer()
+    } catch (cause) {
+      setError(messageOf(cause))
+    } finally {
+      setPicking(false)
+    }
+  }
+  const selectExistingDirectory = (key: string) => {
+    const directory = directories.find(candidate => candidate.key === key)
+    setForm(current => ({
+      ...current,
+      existingDirectoryKey: key,
+      profileDirectory: directory?.profiles[0]?.directoryName || '',
+      profileUserIdentifier: directory?.profiles[0]?.userIdentifier || '',
+      browser: directory?.browser || current.browser,
+    }))
+  }
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     if (!form.shopUrl.trim() && !form.loginUrl.trim()) {
@@ -558,26 +646,52 @@ function AccountModal(props: {
     const input: PlatformAccountInput = {
       name: form.name,
       platformName: form.platformName,
-      accountLabel: form.accountLabel,
       shopUrl: form.shopUrl,
       loginUrl: form.loginUrl,
       agentInstructions: form.agentInstructions,
-      ...(account ? { browserDataDirectoryId: account.browserDataDirectoryId } : {}),
+      ...(account ? {
+        browserDataDirectoryId: account.browserDataDirectoryId,
+        browserProfileId: account.browserProfileId,
+      } : {}),
     }
     try {
       if (account) {
         await manager.updateAccount(account.id, input)
+        if (form.profileUserIdentifier !== account.profile.userIdentifier) {
+          await manager.renameProfile(account.profile.id, form.profileUserIdentifier)
+        }
       } else {
-        const directory: BrowserDirectorySelection = form.directoryMode === 'existing'
-          ? { mode: 'existing', id: form.existingDirectoryId }
-          : {
+        let directory: BrowserDirectorySelection
+        if (form.directoryMode === 'existing') {
+          if (!selectedDirectory || !selectedProfile) throw new Error(t('noProfiles'))
+          directory = selectedDirectory.registeredDirectoryId
+            ? {
+                mode: 'existing',
+                id: selectedDirectory.registeredDirectoryId,
+                profileDirectory: selectedProfile.directoryName,
+                profileName: selectedProfile.name,
+                profileUserIdentifier: form.profileUserIdentifier,
+              }
+            : {
+                mode: 'discovered',
+                browser: form.browser,
+                path: selectedDirectory.path,
+                name: selectedDirectory.name,
+                profileDirectory: selectedProfile.directoryName,
+                profileName: selectedProfile.name,
+                profileUserIdentifier: form.profileUserIdentifier,
+              }
+        } else {
+          directory = {
               mode: 'new',
               directory: {
                 name: form.directoryName || undefined,
                 browser: form.browser,
                 path: form.directoryPath || undefined,
+                profileUserIdentifier: form.profileUserIdentifier,
               },
             }
+        }
         await manager.createAccount(input, directory)
       }
       onClose()
@@ -594,33 +708,13 @@ function AccountModal(props: {
         <div className="sam_field">
           <label htmlFor="sam-platform">{t('platformName')}</label>
           <input id="sam-platform" list="sam-platform-presets" required maxLength={100} value={form.platformName}
-            placeholder={t('platformPlaceholder')} onChange={event => setPlatform(event.target.value)} />
-          <datalist id="sam-platform-presets">{PLATFORM_PRESETS.map(preset => <option key={preset.name} value={preset.name} />)}</datalist>
+            placeholder={t('platformPlaceholder')} onChange={event => set('platformName', event.target.value)} />
+          <datalist id="sam-platform-presets">{props.platformNames.map(name => <option key={name} value={name} />)}</datalist>
         </div>
         <div className="sam_field">
           <label htmlFor="sam-name">{t('accountName')}</label>
           <input id="sam-name" required maxLength={120} value={form.name} placeholder={t('accountNamePlaceholder')}
             onChange={event => set('name', event.target.value)} />
-        </div>
-        <div className="sam_field" data-wide="true">
-          <label htmlFor="sam-account-label">{t('accountLabel')}</label>
-          <input id="sam-account-label" maxLength={160} value={form.accountLabel} placeholder={t('accountLabelPlaceholder')}
-            onChange={event => set('accountLabel', event.target.value)} />
-        </div>
-        <div className="sam_field" data-wide="true">
-          <label htmlFor="sam-shop-url">{t('backendUrl')}</label>
-          <input id="sam-shop-url" type="url" maxLength={2048} value={form.shopUrl} placeholder="https://..."
-            onChange={event => set('shopUrl', event.target.value)} />
-        </div>
-        <div className="sam_field" data-wide="true">
-          <label htmlFor="sam-login-url">{t('loginUrl')}</label>
-          <input id="sam-login-url" type="url" maxLength={2048} value={form.loginUrl} placeholder="https://..."
-            onChange={event => set('loginUrl', event.target.value)} />
-        </div>
-        <div className="sam_field" data-wide="true">
-          <label htmlFor="sam-agent-instructions">{t('agentInstructions')}</label>
-          <textarea id="sam-agent-instructions" maxLength={4000} value={form.agentInstructions}
-            placeholder={t('agentPlaceholder')} onChange={event => set('agentInstructions', event.target.value)} />
         </div>
       </div>
 
@@ -631,18 +725,64 @@ function AccountModal(props: {
             <input type="radio" name="directory-mode" checked={form.directoryMode === 'new'} onChange={() => set('directoryMode', 'new')} />
             {t('newDirectory')}
           </label>
-          <label data-selected={form.directoryMode === 'existing'} data-disabled={!directories.length}>
-            <input type="radio" name="directory-mode" checked={form.directoryMode === 'existing'} disabled={!directories.length}
+          <label data-selected={form.directoryMode === 'existing'}>
+            <input type="radio" name="directory-mode" checked={form.directoryMode === 'existing'}
               onChange={() => set('directoryMode', 'existing')} />
             {t('existingDirectory')}
           </label>
         </div>
-        {form.directoryMode === 'existing' ? <div className="sam_field">
-          <label htmlFor="sam-directory-existing">{t('selectDirectory')}</label>
-          <select id="sam-directory-existing" required value={form.existingDirectoryId}
-            onChange={event => set('existingDirectoryId', event.target.value)}>
-            {directories.map(directory => <option key={directory.id} value={directory.id}>{directory.name} · {browserLabel(directory.browser)}</option>)}
-          </select>
+        {form.directoryMode === 'existing' ? <div className="sam_fieldGrid">
+          <div className="sam_field" data-wide="true">
+            <label htmlFor="sam-directory-existing">{t('selectDirectory')}</label>
+            <select id="sam-directory-existing" required value={form.existingDirectoryKey}
+              onChange={event => selectExistingDirectory(event.target.value)}>
+              {!directories.length && <option value="">{t('chooseDirectory')}</option>}
+              {directories.map(directory => <option key={directory.key} value={directory.key}>
+                {directory.name} · {browserLabel(directory.browser)} · {directory.path}
+              </option>)}
+            </select>
+          </div>
+          <div className="sam_field">
+            <label htmlFor="sam-inspect-browser">{t('browser')}</label>
+            <select id="sam-inspect-browser" value={form.browser} disabled={Boolean(selectedDirectory?.registeredDirectoryId)}
+              onChange={event => set('browser', event.target.value as BrowserKind)}>
+              <option value="chrome">{t('chrome')}</option>
+              <option value="edge">{t('edge')}</option>
+            </select>
+          </div>
+          <div className="sam_field sam_fieldAction">
+            <button className="sam_secondaryButton" type="button" disabled={picking} onClick={() => void inspect()}>
+              {picking ? <LoaderCircle className="sam_spinner" size={15} /> : <FolderOpen size={15} />}{t('inspectDirectory')}
+            </button>
+          </div>
+          <div className="sam_field sam_fieldAction" data-wide="true">
+            <button className="sam_secondaryButton" type="button" disabled={picking} onClick={() => void scanComputer()}>
+              {picking ? <LoaderCircle className="sam_spinner" size={15} /> : <HardDrive size={15} />}{t('scanComputer')}
+            </button>
+          </div>
+          <div className="sam_field" data-wide="true">
+            <label htmlFor="sam-profile-existing">{t('selectProfile')}</label>
+            <select id="sam-profile-existing" required value={form.profileDirectory}
+              onChange={event => {
+                const selected = selectedDirectory?.profiles.find(profile => profile.directoryName === event.target.value)
+                setForm(current => ({
+                  ...current,
+                  profileDirectory: event.target.value,
+                  profileUserIdentifier: selected?.userIdentifier || selected?.name || '',
+                }))
+              }}>
+              {!selectedDirectory?.profiles.length && <option value="">{t('noProfiles')}</option>}
+              {selectedDirectory?.profiles.map(profile => <option key={profile.directoryName} value={profile.directoryName}>
+                {profile.userIdentifier} · {profile.directoryName}{profile.accountCount ? ` · ${t('accountCount', { count: profile.accountCount })}` : ''}
+              </option>)}
+            </select>
+          </div>
+          {selectedProfile && selectedProfile.accountCount > 0 && <div className="sam_notice" data-wide="true">
+            <Info size={15} /><span>{t('profileInUse', { count: selectedProfile.accountCount })}</span>
+          </div>}
+          {sameSiteRisk && <div className="sam_error" data-wide="true" role="alert">
+            <CircleAlert size={16} /><span>{t('sameSiteProfileRisk')}</span>
+          </div>}
         </div> : <div className="sam_fieldGrid">
           <div className="sam_field">
             <label htmlFor="sam-directory-name">{t('directoryName')}</label>
@@ -670,8 +810,30 @@ function AccountModal(props: {
 
       {account && <div className="sam_readonlyDirectory">
         <HardDrive size={16} />
-        <div><strong>{account.directory.name}</strong><span>{account.directory.path}</span></div>
+        <div><strong>{account.directory.name} · {account.profile.name}</strong><span>{account.directory.path} · {account.profile.directoryName}</span></div>
       </div>}
+      <div className="sam_fieldGrid">
+        <div className="sam_field" data-wide="true">
+          <label htmlFor="sam-profile-identifier">{t('profileUserIdentifier')}</label>
+          <input id="sam-profile-identifier" required maxLength={120} value={form.profileUserIdentifier}
+            placeholder={t('profileUserIdentifierPlaceholder')} onChange={event => set('profileUserIdentifier', event.target.value)} />
+        </div>
+        <div className="sam_field" data-wide="true">
+          <label htmlFor="sam-shop-url">{t('backendUrl')}</label>
+          <input id="sam-shop-url" type="url" maxLength={2048} value={form.shopUrl} placeholder="https://..."
+            onChange={event => set('shopUrl', event.target.value)} />
+        </div>
+        <div className="sam_field" data-wide="true">
+          <label htmlFor="sam-login-url">{t('loginUrl')}</label>
+          <input id="sam-login-url" type="url" maxLength={2048} value={form.loginUrl} placeholder="https://..."
+            onChange={event => set('loginUrl', event.target.value)} />
+        </div>
+        <div className="sam_field" data-wide="true">
+          <label htmlFor="sam-agent-instructions">{t('agentInstructions')}</label>
+          <textarea id="sam-agent-instructions" maxLength={4000} value={form.agentInstructions}
+            placeholder={t('agentPlaceholder')} onChange={event => set('agentInstructions', event.target.value)} />
+        </div>
+      </div>
       <div className="sam_formActions">
         <button className="sam_secondaryButton" type="button" disabled={submitting || picking} onClick={onClose}>{t('cancel')}</button>
         <button className="sam_primaryButton" type="submit" disabled={submitting || picking}>
@@ -839,12 +1001,15 @@ function AccountRow(props: {
   return <li className="sam_accountRow">
     <div className="sam_accountIdentity">
       <div className="sam_nameLine">
+        <code className="sam_accountId" title={account.id}>{account.id}</code>
         <strong>{account.name}</strong>
         <span className="sam_platformTag">{account.platformName}</span>
       </div>
       <div className="sam_metaLine">
-        {account.accountLabel && <span>{account.accountLabel}</span>}
+        <span>{account.profile.userIdentifier}</span>
         {(account.shopUrl || account.loginUrl) && <span>{hostname(account.shopUrl || account.loginUrl)}</span>}
+        <span>{t('profile')} · {account.profile.directoryName}</span>
+        <span title={`${account.directory.path}\\${account.profile.directoryName}`}>{account.directory.path}\{account.profile.directoryName}</span>
         <span>{account.status.platformOpen ? t('platformOpen') : account.status.browserOnline ? t('browserOnline') : t('browserOffline')}</span>
         {account.loginStatusSource && <span>{t(account.loginStatusSource === 'manual' ? 'manuallyReady' : 'automaticCheck')} · {formatTime(
           account.loginStatusSource === 'manual' ? account.lastLoginValidAt : account.lastLoginCheckAt,
@@ -861,6 +1026,10 @@ function AccountRow(props: {
     <div className="sam_actions">
       <IconButton title={t('openPlatform')} disabled={busy} onClick={() => void manager.openAccount(account.id)}><ExternalLink size={16} /></IconButton>
       <IconButton title={t('checkLogin')} disabled={busy} onClick={onCheckLogin}><ShieldCheck size={16} /></IconButton>
+      <IconButton title={t('syncCookies')} disabled={busy || !account.status.browserOnline}
+        onClick={() => void manager.syncCookies(account.profile.id)}><RefreshCw size={16} /></IconButton>
+      {account.status.browserOnline && <IconButton title={t('closeBrowser')} disabled={busy} danger
+        onClick={() => void manager.closeBrowser(account.id)}><Power size={16} /></IconButton>}
       <IconButton title={t('keepAlive')} disabled={busy} active={account.keepAlive.enabled} onClick={onKeepAlive}><Timer size={16} /></IconButton>
       <IconButton title={t('edit')} disabled={busy} onClick={onEdit}><Pencil size={16} /></IconButton>
       <IconButton title={t('archive')} disabled={busy} danger onClick={() => void archiveAccount()}><Archive size={16} /></IconButton>
@@ -886,12 +1055,6 @@ function DirectoryGroup(props: {
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1400)
   }
-  const close = async () => {
-    const first = accounts[0]
-    if (!first) return
-    if (accounts.length > 1 && !window.confirm(interpolate(t('closeSharedConfirm'), { count: accounts.length }))) return
-    await manager.closeBrowser(first.id)
-  }
   const rename = async () => {
     const name = window.prompt(t('renameDirectoryPrompt'), directory.name)?.trim()
     if (name && name !== directory.name) await manager.renameDirectory(directory.id, name)
@@ -899,8 +1062,7 @@ function DirectoryGroup(props: {
   const archive = async () => {
     if (window.confirm(interpolate(t('archiveDirectoryConfirm'), { name: directory.name }))) await manager.archiveDirectory(directory.id)
   }
-  const cookie = directory.status.cookieSync
-  const cookieLabel = cookie.state === 'ok' ? t('cookieOk') : cookie.state === 'error' ? t('cookieError') : t('cookieIdle')
+  const profileGroups = [...new Map(accounts.map(account => [account.profile.id, account.profile])).values()]
   return <section className="sam_directoryGroup">
     <header className="sam_directoryHeader">
       <div className="sam_directoryIcon"><HardDrive size={18} /></div>
@@ -914,28 +1076,35 @@ function DirectoryGroup(props: {
           <span>{interpolate(t('activeAccountCount'), { count: directory.activeAccountCount })}</span>
           <span>{interpolate(t('archivedAccountCount'), { count: directory.archivedAccountCount })}</span>
           <span>{interpolate(t('pages'), { count: directory.status.pages })}</span>
-          <span data-state={cookie.state}>{cookieLabel}{cookie.lastSyncedAt ? ` · ${formatTime(cookie.lastSyncedAt, '')}` : ''}</span>
+          {directory.status.onlineProfileNames.length > 0 && <span>{interpolate(t('activeProfile'), { name: directory.status.onlineProfileNames.join('、') })}</span>}
         </div>
       </div>
       <div className="sam_actions sam_directoryActions">
         <IconButton title={copied ? t('copied') : t('copyPath')} onClick={() => void copyPath()}>{copied ? <Check size={16} /> : <Copy size={16} />}</IconButton>
         <IconButton title={t('revealDirectory')} disabled={busy} onClick={() => void manager.revealDirectory(directory.id)}><FolderOpen size={16} /></IconButton>
         <IconButton title={t('renameDirectory')} disabled={busy} onClick={() => void rename()}><Pencil size={16} /></IconButton>
-        <IconButton title={t('syncCookies')} disabled={busy || !directory.status.online} onClick={() => void manager.syncCookies(directory.id)}><RefreshCw size={16} /></IconButton>
-        {directory.status.online && <IconButton title={t('closeBrowser')} disabled={busy || !accounts.length} danger onClick={() => void close()}><Power size={16} /></IconButton>}
         <IconButton title={directory.status.online || directory.activeAccountCount ? t('archiveDirectoryBlocked') : t('archiveDirectory')}
           disabled={busy || directory.status.online || directory.activeAccountCount > 0} onClick={() => void archive()}><Archive size={16} /></IconButton>
       </div>
       <div className="sam_path" title={directory.path}>{directory.path}</div>
     </header>
-    {accounts.length ? <ul className="sam_accountList">{accounts.map(account => <AccountRow
-      key={account.id}
-      account={account}
-      manager={manager}
-      onEdit={() => onEdit(account)}
-      onKeepAlive={() => onKeepAlive(account)}
-      onCheckLogin={() => onCheckLogin(account)}
-    />)}</ul> : <div className="sam_directoryEmpty">{t('noAccountsInDirectory')}</div>}
+    {accounts.length ? <div className="sam_profileGroups">{profileGroups.map(profile => {
+      const profileAccounts = accounts.filter(account => account.browserProfileId === profile.id)
+      return <section className="sam_profileGroup" key={profile.id}>
+        <header className="sam_profileHeader">
+          <strong>{profile.userIdentifier}</strong><span>{profile.name} · {profile.directoryName}</span>
+          <span>{interpolate(t('accountCount'), { count: profileAccounts.length })}</span>
+        </header>
+        <ul className="sam_accountList">{profileAccounts.map(account => <AccountRow
+          key={account.id}
+          account={account}
+          manager={manager}
+          onEdit={() => onEdit(account)}
+          onKeepAlive={() => onKeepAlive(account)}
+          onCheckLogin={() => onCheckLogin(account)}
+        />)}</ul>
+      </section>
+    })}</div> : <div className="sam_directoryEmpty">{t('noAccountsInDirectory')}</div>}
   </section>
 }
 
@@ -1047,6 +1216,7 @@ function PlatformManagerSection(props: ManagerProps): ReactNode {
   const [keepAliveAccount, setKeepAliveAccount] = useState<PublicPlatformAccount>()
   const [loginResult, setLoginResult] = useState<{ account: PublicPlatformAccount, result: LoginCheckResult }>()
   const [deleteDirectory, setDeleteDirectory] = useState<PublicBrowserDataDirectory>()
+  const [searchQuery, setSearchQuery] = useState('')
   useEffect(() => {
     let ancestor = sectionRef.current?.parentElement
     while (ancestor && getComputedStyle(ancestor).position !== 'fixed') ancestor = ancestor.parentElement
@@ -1058,10 +1228,18 @@ function PlatformManagerSection(props: ManagerProps): ReactNode {
     const timer = window.setInterval(() => void props.refresh(), 5000)
     return () => window.clearInterval(timer)
   }, [props.refresh])
+  const filteredAccounts = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase()
+    if (!query) return snapshot.accounts
+    return snapshot.accounts.filter(account => [account.id, account.platformName, account.name, account.profile.userIdentifier]
+      .some(value => value.toLocaleLowerCase().includes(query)))
+  }, [searchQuery, snapshot.accounts])
   const groups = useMemo(() => snapshot.directories.map(directory => ({
     directory,
-    accounts: snapshot.accounts.filter(account => account.browserDataDirectoryId === directory.id),
-  })), [snapshot.accounts, snapshot.directories])
+    accounts: filteredAccounts.filter(account => account.browserDataDirectoryId === directory.id),
+  })).filter(group => !searchQuery.trim() || group.accounts.length > 0), [filteredAccounts, searchQuery, snapshot.directories])
+  const platformNames = useMemo(() => [...new Set([...snapshot.accounts, ...snapshot.archivedAccounts]
+    .map(account => account.platformName))].sort((left, right) => left.localeCompare(right)), [snapshot.accounts, snapshot.archivedAccounts])
   const checkLogin = async (account: PublicPlatformAccount) => {
     try {
       const result = await props.checkLogin(account.id)
@@ -1079,13 +1257,20 @@ function PlatformManagerSection(props: ManagerProps): ReactNode {
     {snapshot.error && <div className="sam_error" role="alert"><CircleAlert size={16} /><span>{snapshot.error}</span></div>}
     <div className="sam_toolbar">
       <span>{interpolate(props.t('summary'), { accounts: snapshot.accounts.length, directories: snapshot.directories.length })}</span>
-      <IconButton title={props.t('refresh')} disabled={snapshot.loading || snapshot.busyKeys.length > 0} onClick={() => void props.refresh()}>
-        <RefreshCw className={snapshot.loading ? 'sam_spinner' : undefined} size={16} />
-      </IconButton>
+      <div className="sam_toolbarActions">
+        <label className="sam_searchBox">
+          <Search size={15} />
+          <input type="search" aria-label={props.t('searchAccounts')} placeholder={props.t('searchAccounts')}
+            value={searchQuery} onChange={event => setSearchQuery(event.target.value)} />
+        </label>
+        <IconButton title={props.t('refresh')} disabled={snapshot.loading || snapshot.busyKeys.length > 0} onClick={() => void props.refresh()}>
+          <RefreshCw className={snapshot.loading ? 'sam_spinner' : undefined} size={16} />
+        </IconButton>
+      </div>
     </div>
     {!snapshot.loading && !snapshot.accounts.length && !snapshot.directories.length
       ? <div className="sam_empty"><HardDrive size={24} /><h3>{props.t('emptyTitle')}</h3><p>{props.t('emptyBody')}</p><button className="sam_secondaryButton" type="button" onClick={() => setAccountModal(null)}><Plus size={15} />{props.t('add')}</button></div>
-      : <div className="sam_directoryList">{groups.map(group => <DirectoryGroup
+      : groups.length ? <div className="sam_directoryList">{groups.map(group => <DirectoryGroup
           key={group.directory.id}
           directory={group.directory}
           accounts={group.accounts}
@@ -1093,12 +1278,14 @@ function PlatformManagerSection(props: ManagerProps): ReactNode {
           onEdit={account => setAccountModal(account)}
           onKeepAlive={setKeepAliveAccount}
           onCheckLogin={account => void checkLogin(account)}
-        />)}</div>}
+        />)}</div> : <div className="sam_directoryEmpty sam_searchEmpty">{props.t('noSearchResults')}</div>}
     <ArchivedAccounts manager={props} accounts={snapshot.archivedAccounts} />
     <ArchivedDirectories manager={props} directories={snapshot.archivedDirectories} onDelete={setDeleteDirectory} />
     {accountModal !== undefined && <AccountModal
       account={accountModal || undefined}
-      directories={snapshot.directories}
+      availableDirectories={snapshot.availableDirectories}
+      accounts={snapshot.accounts}
+      platformNames={platformNames}
       manager={props}
       onClose={() => setAccountModal(undefined)}
     />}
@@ -1139,13 +1326,24 @@ export function apply(ctx: Context): void {
     manualConfirmLogin: (id: string) => directory.mutate(accountKey(id), 'manual-confirm-login', { id }),
     setKeepAlive: (id: string, keepAlive: Partial<KeepAliveSettings>) => directory.mutate(accountKey(id), 'keep-alive-settings', { id, keepAlive }),
     runKeepAlive: (id: string) => directory.mutate(accountKey(id), 'keep-alive-now', { id }),
-    syncCookies: (directoryId: string) => directory.mutate(`directory:${directoryId}`, 'sync-cookies', { directoryId }),
+    syncCookies: (profileId: string) => directory.mutate(`profile:${profileId}`, 'sync-cookies', { profileId }),
     pickDirectory: async () => {
       const result = await directory.mutate<{ path: string | null }>('directory:picker', 'pick-directory')
       return result?.path || null
     },
+    inspectDirectory: (browser: BrowserKind, path: string) => directory.mutate<DiscoveredBrowserDataDirectory>(
+      'directory:inspect',
+      'inspect-directory',
+      { browser, path },
+    ),
+    scanComputer: () => directory.mutate('directory:scan', 'scan-computer'),
     revealDirectory: (directoryId: string) => directory.mutate(`directory:${directoryId}`, 'reveal-directory', { directoryId }),
     renameDirectory: (directoryId: string, name: string) => directory.mutate(`directory:${directoryId}`, 'rename-directory', { directoryId, name }),
+    renameProfile: (profileId: string, userIdentifier: string) => directory.mutate(
+      `profile:${profileId}`,
+      'rename-profile',
+      { profileId, userIdentifier },
+    ),
     archiveDirectory: (directoryId: string) => directory.mutate(`directory:${directoryId}`, 'archive-directory', { directoryId }),
     restoreDirectory: (directoryId: string) => directory.mutate(`directory:${directoryId}`, 'restore-directory', { directoryId }),
     deleteDirectory: (directoryId: string, deleteLocalData: boolean, confirmationName?: string) => directory.mutate(

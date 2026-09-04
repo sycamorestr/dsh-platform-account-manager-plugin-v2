@@ -8,7 +8,7 @@
 
 这是一个面向 DeepSeek Harness（DSH）的本地优先平台账号与浏览器会话管理插件。它不是代替人登录的密码管理器，也不是负责点击和填写网页的自动化工具；它是 Agent 与真实业务后台之间的**账号目录、会话容器和浏览器生命周期层**。
 
-> 当前版本：`0.3.1`
+> 当前版本：`0.5.0`
 
 ## 这个插件到底做什么
 
@@ -21,11 +21,13 @@
 本插件为这个问题建立一条明确映射：
 
 ```text
+可见账号 ID（如 ACC-0001）
+        ↓
 平台名称 + 账号名称
         ↓
 后台地址 / 登录地址
         ↓
-指定的 Chrome 或 Edge 浏览器数据目录
+指定的 Chrome 或 Edge 浏览器数据根目录 + 用户配置（Profile）
         ↓
 Cookie、Local Storage、IndexedDB 与其他站点状态
 ```
@@ -65,7 +67,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 | 产品定位 | 集 Agent、插件、连接器、自动化和浏览器操作于一体的平台 | 可嵌入 DSH 的账号与会话管理插件 |
 | 浏览器接入 | 优先通过扩展连接用户正在使用的浏览器，也提供直连 CDP | 为账号启动受管 Chrome/Edge，并绑定明确的浏览器数据目录 |
 | 账号模型 | 通过平台连接器和应用授权管理多账号 | 任意平台名称 + 账号名称 + 后台/登录地址，平台不受固定枚举限制 |
-| 隔离方式 | 连接器侧多账号与数据隔离 | 直接把 Chromium 浏览器数据目录作为身份边界，可独立也可共享 |
+| 隔离方式 | 连接器侧多账号与数据隔离 | 以 Chromium Data Root + Profile 作为身份边界，可独立也可共享 |
 | 登录状态 | 复用浏览器已有会话或平台连接器授权 | 复用完整浏览器数据目录，并额外持久化可处理的会话 Cookie |
 | 页面操作 | 平台内置导航、读取、点击、输入和完整工作流 | 明确不做通用页面操作，只提供打开、检测和关闭等会话能力 |
 | 扩展方式 | 通过 Agent、Plugin、Connector 和 Skill 生态扩展 | 通过 `ctx.platformSessions` 向独立的 DSH 浏览器操作插件提供连接 |
@@ -77,7 +79,9 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 本项目不是把“打开一个带 Cookie 的浏览器”简单封装成按钮，而是针对长期运行的 Agent 场景补齐了账号生命周期：
 
-- **明确的数据目录所有权**：每个账号都指向已登记的浏览器数据目录，目录来源分为插件创建、自定义和旧版迁移。
+- **明确的两级浏览器身份**：每个账号同时绑定浏览器数据根目录和其中的用户配置（Profile），不会隐式落到错误的 `Default`。
+- **自动发现已有身份**：新增账号时自动列出当前 Windows 用户下的 Chrome/Edge 标准数据根目录及其 `Default`、`Profile N` 用户配置，也可手动检查其他目录。
+- **明确的数据目录所有权**：目录来源分为插件创建、自定义和旧版迁移；已有系统目录只登记不接管删除权。
 - **隔离与资源复用可选**：同平台多账号可以独立隔离，可信的不同平台可以共享一个浏览器进程。
 - **数据位置可控**：新建账号时可以把浏览器数据放到非系统盘，不强制堆积在默认用户目录。
 - **会话 Cookie 持久化**：只处理可安全复制的会话 Cookie，由 Chromium 写回原目录，不把 Cookie 导出到账号元数据。
@@ -93,7 +97,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 典型使用流程：
 
 1. 在“平台管理”中创建账号，填写平台名称、账号名称和后台地址。
-2. 为账号创建独立浏览器数据目录，或复用一个可信的已有目录。
+2. 为账号创建独立浏览器数据根目录，或从自动发现的已有目录中选择一个用户配置。
 3. 打开平台，在插件启动的 Chrome/Edge 中人工完成登录、扫码或多因素验证。
 4. 点击“检测登录状态”，确认后台可以正常进入。
 5. 后续直接让 Agent 打开该平台账号，插件会复用同一个浏览器数据目录。
@@ -109,7 +113,7 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 ![平台管理总览](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/platform-manager-overview.png)
 
-- 浏览器数据目录是一级分组。同一个目录中的账号共享 Chromium 进程、Cookie 和站点存储；需要隔离的账号应使用不同目录。
+- 浏览器数据根目录是一级分组，其下按 Profile 分层。同一 Profile 中的账号共享 Cookie 和站点存储；需要隔离的账号应使用不同 Profile 或不同根目录。
 - 目录标题区展示浏览器类型、在线状态、活动/归档账号数、页面数和最近一次 Cookie 同步状态。
 - 目录右侧操作依次用于复制目录地址、在资源管理器中打开、重命名、同步 Cookie，以及满足条件后归档目录。
 - 账号行展示平台、后台域名、浏览器是否在线、最近检测时间和登录结论；右侧可以打开平台、检测登录状态、配置保活、编辑或归档。
@@ -120,10 +124,10 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 ![新增账号并复用已有目录](https://sycamorestr.github.io/dsh-platform-account-manager-plugin/images/add-account-existing-directory.png)
 
 - 平台名称可以自由输入，因此不局限于电商，也可以登记广告、内容、客服、ERP 或其他企业后台。
-- 账号名称用于用户和 Agent 识别目标账号；账号标识只供人工备注，不作为 Agent 识别或权限控制字段。
+- 每个账号创建后都会获得不会改变、删除后不复用的短 ID（如 `ACC-0001`）；用户和 Agent 均可直接用 ID 精确定位。
 - 平台后台地址用于日常打开和登录检测，登录地址用于判断页面是否被重定向回登录入口，二者至少填写一个。
 - “Agent 操作说明”提供账号用途、业务范围和注意事项等上下文，不会授予额外权限。
-- 选择“复用已有目录”时，新账号与目标目录中的其他账号共享全部浏览器状态，适合彼此信任的不同平台；不建议用于需要隔离的同平台多账号。
+- 选择“复用已有目录”时，需要继续选择其中的 Profile；新账号只与同一 Profile 中的账号共享浏览器状态。
 
 ### 3. 新增独立浏览器数据目录
 
@@ -175,24 +179,30 @@ Accio Work 是完整的商业 Agent 平台，本项目只是 DSH 中的账号和
 
 - 新增、编辑、归档、恢复和永久移除账号记录。
 - 平台名称自由输入，可兼容电商、内容、广告、客服和企业系统。
-- 内置常见平台建议，但不把平台限制在固定枚举中。
+- 平台建议只来自用户已经创建或归档的账号，不内置平台预设，并始终允许自由输入新平台。
 - 后台地址和登录地址由用户配置，至少填写一个。
 - 活动账号由“平台名称 + 账号名称”唯一识别，创建、编辑和恢复时都会拒绝重复组合；归档账号允许保留历史重名记录。
 - “Agent 操作说明”用于提供账号用途、业务范围和注意事项等上下文，不是权限控制规则。
 
-### 浏览器数据目录管理
+### 浏览器数据目录与用户配置管理
 
-- 每个目录固定使用 Chromium 的 `Default` 用户，不再引入额外的浏览器用户/Profile 层级。
+- 使用 `浏览器数据根目录 → 用户配置（Profile）→ 平台账号` 三层模型。
+- 新建数据根目录默认绑定 Chromium 的 `Default`；复用已有根目录时可以选择 `Default` 或任意可用的 `Profile N`。
+- 自动读取 `Local State` 与各 Profile 的 `Preferences`，显示稳定目录名和浏览器中的用户可读名称。
+- 默认发现当前 Windows 用户的 Chrome、Edge 及常见 Beta/Dev/Canary 数据根目录；用户也可显式触发有目录数和深度上限的本机磁盘扫描。
+- 排除 Guest、System、备份和明显临时 Profile。
 - 新建账号时可以：
   - 在全局默认根目录下自动创建独立数据目录；
   - 通过系统原生目录选择器指定绝对路径；
-  - 复用插件中已有的浏览器数据目录。
+  - 复用插件中已有的数据根目录和 Profile；
+  - 登记系统中发现或手动检查的外部数据根目录和 Profile。
 - UI 展示完整目录地址，并提供复制和打开文件夹操作。
 - 支持 Google Chrome 与 Microsoft Edge。
 - 自定义新目录必须为空，避免覆盖已有浏览器资料。
 - 已登记的目录不允许重复或互相嵌套，降低误用风险。
-- 账号创建后不支持换绑或移动到其他目录，避免跨目录复制登录资料带来的损坏与串号风险。
+- 账号创建后不支持换绑或移动到其他数据根目录/Profile，避免跨身份复制登录资料带来的损坏与串号风险。
 - 目录可以重命名，重命名只改变 UI 显示名称，不改变磁盘地址。
+- 同一个数据根目录下可以同时打开多个受管 Profile；页面、登录检测、Cookie 同步和关闭都按 Profile 隔离。
 
 ### 浏览器数据目录生命周期
 
@@ -208,7 +218,7 @@ UI 会分别显示活动账号引用数和归档账号引用数。删除归档�
 删除提供两种模式：
 
 - **仅移除目录登记，保留本机文件**：适用于所有目录来源；
-- **移除登记并删除本机浏览器数据**：只适用于插件在默认 `browserDataRoot/<directory-id>` 下创建的目录。
+- **移除登记并删除本机浏览器数据**：只适用于插件在默认 `browserDataRoot/<account-id>` 下创建的目录。
 
 物理删除必须同时满足：目录已归档、浏览器离线、没有活动账号引用、路径严格位于默认根目录、目录不是符号链接或联接、所有权标记与目录记录完全匹配，并由用户输入完整目录名称确认。旧版 `profiles/` 目录和用户自定义目录永远只能取消登记，插件不会递归删除其本机文件。
 
@@ -220,13 +230,13 @@ UI 会分别显示活动账号引用数和归档账号引用数。删除归档�
 - 必须严格隔离 Cookie 和站点存储的账号；
 - 风控敏感或权限边界不同的业务。
 
-**共享目录**适合：
+**共享 Profile**适合：
 
 - 同一组织下彼此信任的多个不同平台；
 - 希望共用一个浏览器进程，减少内存与进程数量；
 - 需要在同一浏览器环境中保留关联站点状态。
 
-共享目录意味着共享全部浏览器状态，不只是某一个平台的 Cookie。关闭这个目录对应的浏览器时，该目录下所有账号页面都会一起关闭。
+共享 Profile 意味着共享全部浏览器状态，不只是某一个平台的 Cookie。不同 Profile 即使位于同一 Data Root，也具有各自的页面目标和 Cookie Store；关闭账号浏览器只关闭该账号绑定的 Profile 页面，最后一个受管 Profile 关闭后才结束 Root 进程。
 
 ## Cookie 持久化机制
 
@@ -267,6 +277,7 @@ Chromium 原本会把普通持久 Cookie 保存到浏览器数据目录，但部
 --remote-debugging-address=127.0.0.1
 --remote-debugging-port=<运行时分配的固定非零端口>
 --user-data-dir=<浏览器数据目录>
+--profile-directory=<Default 或 Profile N>
 ```
 
 同时遵循以下限制：
@@ -279,7 +290,7 @@ Chromium 原本会把普通持久 Cookie 保存到浏览器数据目录，但部
 
 这是针对当前 Chrome、Edge 与目标平台的实测结论，不代表所有平台风控都采用相同判断。启用 CDP 仍可能被某些站点识别。
 
-固定端口启动时 Chromium 不会提供可依赖的 `DevToolsActivePort` 文件，因此插件维护独立的 `browser-runtime.json`，记录“数据目录 -> PID、端口、实例 ID”的对应关系。DSH 重启后会验证 PID 和 CDP 健康状态，只恢复仍然有效的记录，并清理陈旧记录。
+固定端口启动时 Chromium 不会提供可依赖的 `DevToolsActivePort` 文件，因此插件维护独立的 `browser-runtime.json`，记录“数据根目录 + Profile -> PID、端口、实例 ID”的对应关系。DSH 重启后会验证 Profile、PID 和 CDP 健康状态，只恢复仍然有效的记录，并清理陈旧记录。
 
 ## 登录状态检测
 
@@ -319,7 +330,7 @@ Chromium 原本会把普通持久 Cookie 保存到浏览器数据目录，但部
 - 本次任务临时启动浏览器后是否自动关闭；
 - 立即运行一次。
 
-调度器每分钟检查到期任务。共享同一个浏览器数据目录的到期账号会被分为一组，在同一个浏览器进程中依次检测，减少重复启动成本。
+调度器每分钟检查到期任务。共享同一个 Profile 的到期账号会被分为一组，在对应浏览器身份中依次检测，减少重复启动成本。
 
 每次运行会访问账号配置的后台地址、观察登录重定向并同步 Cookie。失败任务使用指数退避，最大放大到正常间隔的 8 倍。
 
@@ -336,9 +347,9 @@ Chromium 原本会把普通持久 Cookie 保存到浏览器数据目录，但部
 | `platform_account_list` | 按平台名称和账号名称列出账号、登录检测、保活和浏览器状态 |
 | `platform_account_open` | 在托管浏览器中打开配置的后台或登录地址 |
 | `platform_account_check_login` | 访问配置的后台地址并根据重定向检测登录状态 |
-| `platform_browser_close` | 同步 Cookie 后关闭整个浏览器数据目录对应的浏览器 |
+| `platform_browser_close` | 同步 Cookie 后关闭账号绑定的浏览器 Profile 页面 |
 
-`platform_browser_close` 会经过 DSH 工具批准流程，因为共享目录下可能有多个账号受到影响。
+`platform_browser_close` 会经过 DSH 工具批准流程，因为共享同一 Profile 的多个账号可能受到影响。
 
 工具输出不包含：
 
@@ -348,7 +359,7 @@ Chromium 原本会把普通持久 Cookie 保存到浏览器数据目录，但部
 - 密码或验证码。
 - 平台登录用户名、手机号或邮箱，以及后台地址和登录地址。
 
-Agent 先使用 `platformName + name` 识别目标账号，再把返回的 `id` 传给其他工具。目录名称、目录 ID 和目录地址都不参与 Agent 的账号识别。
+Agent 可以直接使用平台管理页显示的短 ID（如 `ACC-0001`）精确打开账号，也可以先通过列表按平台或名称找到 ID。目录名称、目录 ID 和目录地址都不参与 Agent 的账号识别。
 
 ## 明确不做什么
 
@@ -400,7 +411,8 @@ flowchart LR
   REPO --> META[accounts.json]
   BROWSER --> RUNTIME[browser-runtime.json]
   BROWSER --> CHROMIUM[Chrome / Edge]
-  CHROMIUM --> PROFILE[浏览器数据目录]
+  CHROMIUM --> ROOT[浏览器数据根目录]
+  ROOT --> PROFILE[Default / Profile N]
 ```
 
 ### 模块职责
@@ -409,7 +421,8 @@ flowchart LR
 | --- | --- |
 | `src/index.ts` | 插件配置、依赖注入和生命周期装配 |
 | `src/shared.ts` | 账号、目录、状态和保活共享类型 |
-| `src/store.ts` | v3 数据模型、迁移、目录生命周期、安全删除、校验和原子写入 |
+| `src/store.ts` | v5 数据模型、迁移、短 ID 分配、目录/Profile 生命周期、安全删除、校验和原子写入 |
+| `src/discovery.ts` | Chrome/Edge 标准数据根目录发现、Local State 与 Preferences 只读解析 |
 | `src/browser.ts` | 浏览器启动、运行时登记、Cookie 同步和登录检测 |
 | `src/maintenance.ts` | 定时保活、共享目录分组和失败退避 |
 | `src/api.ts` | 仅限本机 UI 的 HTTP API 与目录选择器 |
@@ -437,13 +450,15 @@ flowchart LR
 
 ```text
 store-account-manager/
-├── accounts.json                # v3 元数据，不保存密码和 Cookie 值
+├── accounts.json                # v5 元数据，不保存密码和 Cookie 值
 ├── accounts.v1.backup.json      # 首次从 v1 迁移时创建
 ├── accounts.v2.backup.json      # 首次从 v2 迁移时创建，内容与原文件完全一致
-├── browser-runtime.json         # 当前浏览器 PID 与环回 CDP 端口
+├── accounts.v3.backup.json      # 首次从 v3 迁移时创建，内容与原文件完全一致
+├── accounts.v4.backup.json      # 首次从 v4 迁移时创建，内容与原文件完全一致
+├── browser-runtime.json         # 当前 Data Root/Profile、PID 与环回 CDP 端口
 ├── profiles/                    # v1 账号原有目录，迁移后仍原地使用
 └── browser-data/                # 默认新建目录根路径
-    └── <directory-id>/
+    └── <account-id>/
         ├── .dsh-browser-data.json
         └── Default/             # Chromium 自己维护的数据
 ```
@@ -452,8 +467,9 @@ store-account-manager/
 
 账号元数据与浏览器状态分离：
 
-- 一个 `PlatformAccount` 必须指向一个 `BrowserDataDirectory`；
-- 多个账号可以指向同一个目录；
+- 一个 `PlatformAccount` 必须同时指向一个 `BrowserDataDirectory` 和其中的 `BrowserProfile`；
+- 多个不同平台账号可以指向同一个 Profile，并共享 Cookie 和站点存储；
+- 一个 Data Root 可以登记并同时运行多个 Profile，运行时按 Profile Target 隔离；
 - 目录记录包含浏览器类型、绝对路径和 `plugin-created`、`custom` 或 `legacy` 来源；
 - Cookie 不会复制到 `accounts.json`；
 - 所有 JSON 更新使用临时文件加原子重命名写入。
@@ -527,7 +543,7 @@ DSH 的配置 patch 会整体替换目标行的 `config`，修改时应保留需
 
 ## 数据迁移
 
-### v1 到 v3
+### v1/v2 到 v5
 
 如果检测到 `accounts.json` 的版本是 `1`：
 
@@ -536,20 +552,23 @@ DSH 的配置 patch 会整体替换目标行的 `config`，修改时应保留需
 3. 目录地址继续指向原来的 `profiles/<account-id>`；
 4. 不移动、复制、扫描或导出原有 Cookie；
 5. 将旧目录标记为 `legacy`，不授予插件物理删除权限；
-6. 原子写入 v3 `accounts.json`。
+6. 为每个旧 Data Root 建立明确的 Profile 绑定、分配短账号 ID，并原子写入 v5 `accounts.json`。
 
 迁移不会把旧浏览器资料搬到新的 `browser-data/`。旧登录状态能否继续使用，仍由原目录内容和平台服务端有效期决定。
 
-### v2 到 v3
+旧 v2 的目录来源与登录状态来源推断规则保持不变，原文件仍逐字节备份为 `accounts.v2.backup.json`。
 
-首次由 `0.2.x` 升级到 `0.3.0` 时：
+### v3/v4 到 v5
 
-1. 原文件逐字节备份为 `accounts.v2.backup.json`；
-2. `profiles/<account-id>` 推断为 `legacy`；
-3. 精确位于 `browserDataRoot/<directory-id>` 的目录推断为 `plugin-created`；
-4. 其余地址推断为 `custom`；
-5. 已有自动检测结论标记为 `automatic`，没有自动有效结论的 `ready` 状态标记为 `manual`；
-6. 只更新元数据，不移动、复制、扫描或导出任何浏览器目录与 Cookie。
+首次从 v3 或 v4 升级到 `0.5.0` 时：
+
+1. 原文件逐字节备份为 `accounts.v3.backup.json`；
+2. 读取每个 Data Root 的 `Local State.profile.last_used` 和有效 Profile；
+3. 优先绑定有效的 `last_used`，其次绑定唯一 Profile，再次选择 `Default`；
+4. 同一个旧 Data Root 下的账号共享迁移得到的 Profile；
+5. 只更新插件元数据，不移动、复制、删除或修改任何浏览器资料与 Cookie。
+
+v4 文件会逐字节备份为 `accounts.v4.backup.json`，账号按创建时间和原 ID 稳定分配 `ACC-0001` 起的短 ID，Profile 显示名称会成为初始用户标识。
 
 ## 常用操作
 
@@ -563,11 +582,11 @@ DSH 的配置 patch 会整体替换目标行的 `config`，修改时应保留需
 6. 创建后点击“打开平台”，在浏览器中手动登录。
 7. 回到 DSH 点击“检测登录状态”；通用规则无法判断时，可在结果弹窗中人工标记。
 
-### 让多个平台共享一个目录
+### 让多个平台共享一个 Profile
 
 1. 新增第二个账号。
-2. 选择“复用已有目录”。
-3. 选择目标目录并创建。
+2. 选择“复用已有数据根目录”。
+3. 选择目标 Data Root，再选择目标 Profile 并创建。
 
 共享后，这些账号使用同一个浏览器进程和全部站点数据。不要用它承载需要互相隔离的同平台账号。
 
@@ -625,7 +644,9 @@ pnpm build
 
 当前测试覆盖：
 
-- v1 到 v3 与 v2 到 v3 原地迁移、完整备份、来源推断和旧目录保留；
+- v1/v2/v3/v4 到 v5 原地迁移、完整备份、短 ID 分配、Profile 选择和旧目录保留；
+- Chrome/Edge 标准数据根目录发现、Local State/Profile Preferences 解析与过滤；
+- Data Root、Profile 与账号引用不变量，以及同 Root 多 Profile 并行与关闭隔离；
 - 自由平台名称和 HTTP(S) URL 校验；
 - 自定义绝对路径、空目录、重复/嵌套目录拒绝；
 - 新目录创建与已有目录复用；
@@ -650,7 +671,7 @@ pnpm build
 ## 设计原则
 
 1. **本地优先**：账号元数据和浏览器资料都留在用户指定的本机目录。
-2. **目录是真正的身份边界**：是否共享 Cookie 由浏览器数据目录决定，不制造额外的“浏览器空间”概念。
+2. **Data Root + Profile 是真正的身份边界**：是否共享 Cookie 由浏览器用户配置决定，不制造与 Chromium 无关的“浏览器空间”概念。
 3. **最小 Agent 能力**：账号管理器只暴露会话管理工具，不暴露通用网页控制。
 4. **可恢复运行时**：固定端口通过独立登记文件恢复，不依赖 `DevToolsActivePort`。
 5. **迁移不搬数据**：旧浏览器目录原地沿用，降低登录态和大体积文件迁移风险。

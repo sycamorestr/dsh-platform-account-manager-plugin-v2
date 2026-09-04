@@ -14,7 +14,6 @@ import {
 const accountInput = {
   name: 'Main account',
   platformName: 'Example Platform',
-  accountLabel: 'operator-a',
   shopUrl: 'https://admin.example.com/',
   loginUrl: 'https://login.example.com/',
   agentInstructions: 'Use this account for support work.',
@@ -49,9 +48,11 @@ test('creates accounts with new or shared browser data directories', async () =>
     const customPath = join(root, 'custom-browser-data')
     const first = await repository.create(accountInput, {
       mode: 'new',
-      directory: { name: 'Shared operations', browser: 'edge', path: customPath },
+      directory: { name: 'Shared operations', browser: 'edge', path: customPath, profileUserIdentifier: 'Operator A' },
     })
+    assert.equal(first.id, 'ACC-0001')
     const directory = await repository.directoryForAccount(first)
+    assert.equal((await repository.profileForAccount(first)).userIdentifier, 'Operator A')
     assert.equal(directory.path, customPath)
     assert.equal(directory.browser, 'edge')
     assert.equal(JSON.parse(await readFile(join(customPath, '.dsh-browser-data.json'), 'utf8')).id, directory.id)
@@ -61,9 +62,20 @@ test('creates accounts with new or shared browser data directories', async () =>
       name: 'Second account',
       platformName: 'Another Platform',
       shopUrl: 'https://console.example.net/',
-    }, { mode: 'existing', id: directory.id })
+    }, { mode: 'existing', id: directory.id, profileDirectory: 'Default', profileUserIdentifier: 'Shared operator' })
+    assert.equal(second.id, 'ACC-0002')
     assert.equal(second.browserDataDirectoryId, directory.id)
+    assert.equal((await repository.profileForAccount(second)).userIdentifier, 'Shared operator')
     assert.equal((await repository.accountsForDirectory(directory.id)).length, 2)
+
+    const third = await repository.create({
+      ...accountInput,
+      name: 'Default path account',
+      platformName: 'Third Platform',
+      shopUrl: 'https://third.example.net/',
+    }, { mode: 'new' })
+    assert.equal(third.id, 'ACC-0003')
+    assert.equal((await repository.directoryForAccount(third)).path, join(root, 'browser-root', 'ACC-0003'))
 
     await assert.rejects(
       repository.create({ ...accountInput, name: 'Nested' }, {
@@ -138,7 +150,11 @@ test('migrates v1 records in place and creates an exact backup', async () => {
     assert.equal(await readFile(join(root, 'accounts.v1.backup.json'), 'utf8'), source)
     assert.equal(await readFile(join(profile, 'sentinel.txt'), 'utf8'), 'existing browser data')
     const migrated = JSON.parse(await readFile(join(root, 'accounts.json'), 'utf8'))
-    assert.equal(migrated.version, 3)
+    assert.equal(migrated.version, 5)
+    assert.equal(migrated.nextAccountNumber, 2)
+    assert.equal(migrated.accounts[0].id, 'ACC-0001')
+    assert.equal(migrated.browserProfiles.length, 1)
+    assert.equal(migrated.accounts[0].browserProfileId, migrated.browserProfiles[0].id)
     assert.equal(migrated.accounts[0].browserDataDirectoryId, accountId)
     assert.equal(migrated.browserDataDirectories[0].path, profile)
     assert.equal(migrated.browserDataDirectories[0].id, accountId)
@@ -148,7 +164,7 @@ test('migrates v1 records in place and creates an exact backup', async () => {
   }
 })
 
-test('migrates v2 records to v3 with exact backup, origin inference, and unchanged paths', async () => {
+test('migrates v2 records to v5 with exact backup, origin inference, and unchanged paths', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-platform-v2-migration-'))
   const dataDir = join(root, 'data')
   const browserRoot = join(root, 'browser-root')
@@ -204,19 +220,212 @@ test('migrates v2 records to v3 with exact backup, origin inference, and unchang
 
     assert.equal(await readFile(join(dataDir, 'accounts.v2.backup.json'), 'utf8'), source)
     const migrated = JSON.parse(await readFile(join(dataDir, 'accounts.json'), 'utf8'))
-    assert.equal(migrated.version, 3)
+    assert.equal(migrated.version, 5)
+    assert.equal(migrated.nextAccountNumber, 4)
+    assert.deepEqual(migrated.accounts.map((item: { id: string }) => item.id), ['ACC-0001', 'ACC-0002', 'ACC-0003'])
+    assert.equal(migrated.browserProfiles.length, 3)
+    assert.equal(migrated.accounts[0].browserProfileId, migrated.browserProfiles[0].id)
     assert.deepEqual(migrated.browserDataDirectories.map((item: { origin: string }) => item.origin), ['plugin-created', 'legacy', 'custom'])
     assert.deepEqual(migrated.browserDataDirectories.map((item: { path: string }) => item.path), Object.values(paths))
     assert.equal(migrated.accounts[0].loginStatusSource, 'manual')
     assert.equal(migrated.accounts[1].loginStatusSource, 'automatic')
     for (const path of Object.values(paths)) assert.equal(await readFile(join(path, 'sentinel.txt'), 'utf8'), path)
-    const legacyAccount = await repository.get('66666666-6666-4666-8666-666666666666')
+    const legacyAccount = await repository.get('ACC-0002')
     await repository.archive(legacyAccount.id)
     await repository.archiveDirectory(legacyId, { online: false })
     await assert.rejects(repository.deleteDirectory(legacyId, {
       online: false,
       deleteLocalData: true,
       confirmationName: 'Legacy',
+    }), /only plugin-created/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('migrates v3 to v5 with an exact backup and binds the last-used valid profile', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-platform-v3-migration-'))
+  const dataDir = join(root, 'data')
+  const browserPath = join(root, 'external-user-data')
+  const directoryId = '11111111-1111-4111-8111-111111111111'
+  const accountId = '22222222-2222-4222-8222-222222222222'
+  const createdAt = '2026-03-04T05:06:07.000Z'
+  try {
+    await mkdir(join(browserPath, 'Default'), { recursive: true })
+    await mkdir(join(browserPath, 'Profile 7'), { recursive: true })
+    await writeFile(join(browserPath, 'Default', 'Preferences'), JSON.stringify({ profile: { name: 'Default user' } }))
+    await writeFile(join(browserPath, 'Profile 7', 'Preferences'), JSON.stringify({ profile: { name: 'Selected user' } }))
+    await writeFile(join(browserPath, 'Local State'), JSON.stringify({
+      profile: {
+        last_used: 'Profile 7',
+        info_cache: {
+          Default: { name: 'Default user' },
+          'Profile 7': { name: 'Selected user' },
+        },
+      },
+    }))
+    const v3 = {
+      version: 3,
+      browserDataDirectories: [{
+        id: directoryId,
+        name: 'Existing Edge',
+        browser: 'edge',
+        path: browserPath,
+        managed: false,
+        origin: 'custom',
+        createdAt,
+        updatedAt: createdAt,
+      }],
+      accounts: [{
+        id: accountId,
+        name: 'Existing account',
+        platformName: 'Example',
+        accountLabel: '',
+        shopUrl: 'https://admin.example.com/',
+        loginUrl: '',
+        browserDataDirectoryId: directoryId,
+        agentInstructions: '',
+        loginState: 'ready',
+        loginCheckState: 'unchecked',
+        createdAt,
+        updatedAt: createdAt,
+      }],
+    }
+    await mkdir(dataDir, { recursive: true })
+    const source = `${JSON.stringify(v3, null, 2)}\n`
+    await writeFile(join(dataDir, 'accounts.json'), source)
+    const repository = new AccountRepository(dataDir)
+    await repository.init()
+
+    assert.equal(await readFile(join(dataDir, 'accounts.v3.backup.json'), 'utf8'), source)
+    const profile = await repository.profileForAccount(await repository.get('ACC-0001'))
+    assert.equal(profile.directoryName, 'Profile 7')
+    assert.equal(profile.name, 'Selected user')
+    assert.equal(profile.userIdentifier, 'Selected user')
+    assert.equal(profile.origin, 'discovered')
+    assert.equal(JSON.parse(await readFile(join(dataDir, 'accounts.json'), 'utf8')).version, 5)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('migrates v4 with an exact backup and keeps short account ids monotonic after deletion', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-platform-v4-migration-'))
+  const createdAt = '2026-04-05T06:07:08.000Z'
+  const directoryId = '11111111-1111-4111-8111-111111111111'
+  const profileId = '22222222-2222-4222-8222-222222222222'
+  try {
+    const v4 = {
+      version: 4,
+      browserDataDirectories: [{
+        id: directoryId,
+        name: 'Migrated root',
+        browser: 'edge',
+        path: join(root, 'external-root'),
+        managed: false,
+        origin: 'custom',
+        createdAt,
+        updatedAt: createdAt,
+      }],
+      browserProfiles: [{
+        id: profileId,
+        browserDataDirectoryId: directoryId,
+        directoryName: 'Default',
+        name: 'Main operator',
+        origin: 'discovered',
+        createdAt,
+        updatedAt: createdAt,
+      }],
+      accounts: [
+        {
+          id: '44444444-4444-4444-8444-444444444444',
+          name: 'Later id',
+          platformName: 'Example',
+          accountLabel: 'removed-field',
+          shopUrl: 'https://later.example.com/',
+          loginUrl: '',
+          browserDataDirectoryId: directoryId,
+          browserProfileId: profileId,
+          agentInstructions: '',
+          loginState: 'pending',
+          loginCheckState: 'unchecked',
+          keepAlive: defaultKeepAlive(),
+          createdAt,
+          updatedAt: createdAt,
+        },
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          name: 'Earlier id',
+          platformName: 'Example',
+          accountLabel: '',
+          shopUrl: 'https://earlier.example.com/',
+          loginUrl: '',
+          browserDataDirectoryId: directoryId,
+          browserProfileId: profileId,
+          agentInstructions: '',
+          loginState: 'pending',
+          loginCheckState: 'unchecked',
+          keepAlive: defaultKeepAlive(),
+          createdAt,
+          updatedAt: createdAt,
+        },
+      ],
+    }
+    const source = `${JSON.stringify(v4, null, 2)}\n`
+    await writeFile(join(root, 'accounts.json'), source)
+    const repository = new AccountRepository(root, join(root, 'browser-root'))
+    await repository.init()
+
+    assert.equal(await readFile(join(root, 'accounts.v4.backup.json'), 'utf8'), source)
+    const migrated = JSON.parse(await readFile(join(root, 'accounts.json'), 'utf8'))
+    assert.equal(migrated.version, 5)
+    assert.equal(migrated.nextAccountNumber, 3)
+    assert.deepEqual(migrated.accounts.map((item: { id: string }) => item.id), ['ACC-0002', 'ACC-0001'])
+    assert.equal(migrated.browserProfiles[0].userIdentifier, 'Main operator')
+    assert.ok(migrated.accounts.every((item: Record<string, unknown>) => !('accountLabel' in item)))
+
+    await repository.archive('ACC-0001')
+    await repository.remove('ACC-0001')
+    const created = await repository.create({
+      ...accountInput,
+      name: 'Post-migration account',
+      platformName: 'Another platform',
+    }, { mode: 'new' })
+    assert.equal(created.id, 'ACC-0003')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('registers an existing profile without writing into external browser data', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-external-profile-'))
+  const browserPath = join(root, 'Edge User Data')
+  try {
+    await mkdir(join(browserPath, 'Profile 4'), { recursive: true })
+    await writeFile(join(browserPath, 'Local State'), JSON.stringify({ profile: { last_used: 'Profile 4' } }))
+    await writeFile(join(browserPath, 'Profile 4', 'Preferences'), JSON.stringify({ profile: { name: 'Store four' } }))
+    const repository = new AccountRepository(join(root, 'data'))
+    await repository.init()
+    const account = await repository.create(accountInput, {
+      mode: 'discovered',
+      browser: 'edge',
+      path: browserPath,
+      name: 'System Edge',
+      profileDirectory: 'Profile 4',
+      profileName: 'Store four',
+    })
+    const directory = await repository.directoryForAccount(account)
+    const profile = await repository.profileForAccount(account)
+    assert.equal(directory.origin, 'custom')
+    assert.equal(directory.managed, false)
+    assert.equal(profile.directoryName, 'Profile 4')
+    await assert.rejects(access(join(browserPath, '.dsh-browser-data.json')), /ENOENT/)
+    await repository.archive(account.id)
+    await repository.archiveDirectory(directory.id, { online: false })
+    await assert.rejects(repository.deleteDirectory(directory.id, {
+      online: false,
+      deleteLocalData: true,
+      confirmationName: 'System Edge',
     }), /only plugin-created/)
   } finally {
     await rm(root, { recursive: true, force: true })

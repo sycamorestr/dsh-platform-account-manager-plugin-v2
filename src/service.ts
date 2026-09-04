@@ -20,29 +20,41 @@ export class PlatformSessionService extends Service {
 
   async open(accountId: string): Promise<PlatformStatus> {
     const account = await this.repository.get(accountId)
-    return await this.browser.open(account, await this.repository.directoryForAccount(account))
+    return await this.browser.open(
+      account,
+      await this.repository.directoryForAccount(account),
+      await this.repository.profileForAccount(account),
+    )
   }
 
   async close(accountId: string): Promise<void> {
     const account = await this.repository.get(accountId)
-    await this.browser.close(await this.repository.directoryForAccount(account))
+    await this.browser.closeProfile(
+      await this.repository.directoryForAccount(account),
+      await this.repository.profileForAccount(account),
+    )
   }
 
   async checkLogin(accountId: string): Promise<LoginCheckResult> {
     const account = await this.repository.get(accountId)
     const directory = await this.repository.directoryForAccount(account)
-    const wasOnline = await this.browser.isOnline(directory)
+    const profile = await this.repository.profileForAccount(account)
+    const wasProfileOnline = await this.browser.isOnline(directory, profile)
     try {
-      const result = await this.browser.checkLogin(account, directory, true)
+      const result = await this.browser.checkLogin(account, directory, profile, true)
       await this.repository.recordLoginCheck(account.id, result)
       return result
     } finally {
-      if (!wasOnline) await this.browser.close(directory).catch(() => undefined)
+      if (!wasProfileOnline) await this.browser.closeProfile(directory, profile).catch(() => undefined)
     }
   }
 
   async connection(accountId: string): Promise<TrustedBrowserConnection> {
     const account = await this.repository.get(accountId)
-    return await this.browser.trustedConnection(account, await this.repository.directoryForAccount(account))
+    return await this.browser.trustedConnection(
+      account,
+      await this.repository.directoryForAccount(account),
+      await this.repository.profileForAccount(account),
+    )
   }
 }

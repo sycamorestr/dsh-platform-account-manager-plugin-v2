@@ -19,17 +19,18 @@ test('agent tools expose session management only', async () => {
 test('login checking does not extract page text or DOM snapshots', async () => {
   const source = await readFile(new URL('../src/browser.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /innerText|outerHTML|DOMSnapshot|querySelector|Runtime\.evaluate/)
+  assert.doesNotMatch(source, /dsh-profile\.invalid/)
 })
 
 test('agent account summaries identify accounts without exposing local or login details', () => {
   const view = agentAccountView({
-    id: '11111111-1111-4111-8111-111111111111',
+    id: 'ACC-0001',
     name: 'Main',
     platformName: 'Example',
-    accountLabel: 'private-login-name',
     shopUrl: 'https://admin.example.com/',
     loginUrl: 'https://login.example.com/',
     browserDataDirectoryId: '22222222-2222-4222-8222-222222222222',
+    browserProfileId: '33333333-3333-4333-8333-333333333333',
     agentInstructions: 'Support only',
     loginState: 'ready',
     loginStatusSource: 'manual',
@@ -67,4 +68,8 @@ test('client consolidates manual confirmation into the login result flow', async
   assert.match(source, /result\.state === 'unknown' \|\| result\.state === 'error'/)
   assert.match(source, /'archive-directory'/)
   assert.match(source, /'delete-directory'/)
+  assert.match(source, /account\.profile\.userIdentifier/)
+  assert.match(source, /account\.id, account\.platformName, account\.name, account\.profile\.userIdentifier/)
+  assert.match(source, /\.\.\.snapshot\.accounts, \.\.\.snapshot\.archivedAccounts/)
+  assert.doesNotMatch(source, /PLATFORM_PRESETS|accountLabel/)
 })
